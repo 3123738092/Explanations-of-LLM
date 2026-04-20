@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.ipynb_checkpoints/
+outputs/
+!outputs/.gitkeep
+*.pt
+*.bin
+*.safetensors
+.vscode/
+.idea/
+.DS_Store

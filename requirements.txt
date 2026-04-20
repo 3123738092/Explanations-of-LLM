@@ -1,0 +1,8 @@
+torch>=2.1.0
+transformers>=4.40.0
+datasets>=2.18.0
+lxt>=0.6.0
+matplotlib>=3.7.0
+numpy>=1.24.0
+pyyaml>=6.0
+tqdm>=4.65.0
