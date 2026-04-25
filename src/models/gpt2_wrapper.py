@@ -1,12 +1,10 @@
-"""GPT-2 loader with AttnLRP rule registration via the `lxt` package."""
+"""GPT-2 loader using lxt's AttnLRP-aware GPT-2 implementation."""
 from __future__ import annotations
 
 import torch
-from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+from transformers import GPT2TokenizerFast
 
-# lxt patches GPT-2 modules in-place so that a standard .backward() produces
-# AttnLRP relevance (see Achtibat et al., ICML 2024).
-from lxt.models.gpt2 import attnlrp as gpt2_attnlrp
+from lxt.explicit.models.gpt2 import GPT2LMHeadModel, attnlrp
 
 
 def load_gpt2_with_attnlrp(name: str = "gpt2", device: str = "cuda"):
@@ -16,6 +14,6 @@ def load_gpt2_with_attnlrp(name: str = "gpt2", device: str = "cuda"):
 
     model = GPT2LMHeadModel.from_pretrained(name, torch_dtype=torch.float32)
     model.eval()
-    gpt2_attnlrp.register(model)
+    attnlrp.register(model)
     model.to(device)
     return model, tokenizer
