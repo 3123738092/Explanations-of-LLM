@@ -35,12 +35,15 @@ def save_token_heatmap(tokens, relevance, out_path: Path, title: str = "") -> No
 def save_layer_heatmap(tokens, layer_relevance, out_path: Path, title: str = "") -> None:
     tokens = _clean_tokens(tokens)
     r = _to_numpy(layer_relevance)
-    vmax = float(np.max(np.abs(r))) + 1e-9
+    # per-layer (per-row) normalization so each layer's pattern is visible
+    # — same convention as lxt's official latent-feature-attribution recipe.
+    row_max = np.maximum(np.abs(r).max(axis=1, keepdims=True), 1e-9)
+    r_norm = r / row_max
 
     fig, ax = plt.subplots(
         figsize=(max(10.0, len(tokens) * 0.2), max(4.0, r.shape[0] * 0.25))
     )
-    ax.imshow(r, cmap="bwr", vmin=-vmax, vmax=vmax, aspect="auto")
+    ax.imshow(r_norm, cmap="bwr", vmin=-1.0, vmax=1.0, aspect="auto")
     ax.set_xticks(range(len(tokens)))
     ax.set_xticklabels(tokens, rotation=90, fontsize=6)
     ax.set_yticks(range(r.shape[0]))
