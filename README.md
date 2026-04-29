@@ -24,16 +24,24 @@ code/
 │   └── LRP-eXplains-Transformers/   # upstream repo (read-only)
 └── src/
     ├── data/squad_loader.py     # SQuAD_v2 → QA prompt
-    ├── models/gpt2_wrapper.py   # lxt GPT-2 + attnlrp.register
-    ├── explain/attnlrp.py       # input·grad relevance under lxt rules
+    ├── models/gpt2_efficient_wrapper.py   # lxt efficient GPT-2 + monkey_patch
+    ├── explain/attnlrp_gpt2_efficient.py  # Input*Gradient relevance under efficient rules
     ├── evaluate/faithfulness.py # MoRF / LeRF AUC
     └── visualize/heatmap.py     # token & layer heatmaps
 ```
 
 ## Setup
 
-Versions are pinned to match the AttnLRP paper code (newer transformers break
-some lxt internals).
+This repo uses the GPT-2 **efficient** AttnLRP path:
+
+- `src/models/gpt2_efficient_wrapper.py`
+- `src/explain/attnlrp_gpt2_efficient.py`
+
+### Version notes (transformers)
+
+- Use `model.family: gpt2_efficient` (see config below).
+- Newer Transformers (e.g. `transformers==4.52.4`) should be used with this
+  efficient path (`lxt.efficient.monkey_patch`).
 
 ```bash
 conda create -n llm-xai-paper python=3.10 -y
@@ -42,7 +50,7 @@ conda activate llm-xai-paper
 # torch 2.1 with CUDA 12.1
 pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121
 
-# transformers must be 4.46.x; lxt + accel deps
+# baseline deps (efficient path)
 pip install transformers==4.46.2 accelerate tabulate matplotlib zennit \
             datasets pyyaml tqdm
 pip install lxt   # = LRP-eXplains-Transformers
@@ -51,26 +59,26 @@ pip install lxt   # = LRP-eXplains-Transformers
 Verify the env:
 
 ```python
-from lxt.explicit.models.gpt2 import GPT2LMHeadModel, attnlrp  # must import cleanly
+from lxt.efficient import monkey_patch  # must import cleanly
 ```
 
 ## Reproduction details (Part 1)
 
 ### Algorithm
 
-We do **not** re-implement the LRP rules. We import the AttnLRP-aware GPT-2 from
-the upstream `lxt` package, register the rules, and propagate relevance via
+We do **not** re-implement the LRP rules. We load GPT-2 and patch the Hugging Face
+implementation via `lxt.efficient.monkey_patch`, then propagate relevance via
 PyTorch autograd:
 
 ```python
-# src/models/gpt2_wrapper.py
-from lxt.explicit.models.gpt2 import GPT2LMHeadModel, attnlrp
-model = GPT2LMHeadModel.from_pretrained("gpt2", torch_dtype=torch.float32)
-attnlrp.register(model)         # patches attention / softmax / LN with LRP rules
+# src/models/gpt2_efficient_wrapper.py
+from transformers.models.gpt2 import modeling_gpt2
+from lxt.efficient import monkey_patch
+monkey_patch(modeling_gpt2, verbose=False)
 ```
 
-Once `attnlrp.register` is called, `loss.backward()` no longer computes ordinary
-gradients — the patched autograd functions propagate **relevance**. So
+Once patched, `loss.backward()` no longer computes ordinary gradients — the
+patched autograd functions propagate **relevance**. So
 `(input_embeds.grad * input_embeds).sum(-1)` gives the AttnLRP relevance of each
 token (matches the reference example
 `third_party/LRP-eXplains-Transformers/examples/paper/llama.py`).
@@ -123,6 +131,32 @@ auc_lerf       >  auc_random_lerf
 conda activate llm-xai-paper
 python main.py --config configs/default.yaml
 ```
+
+### Run the efficient GPT-2 path
+
+`main.py` selects model/explainer by `model.family`. Use:
+
+```yaml
+model:
+  family: gpt2_efficient
+  name: gpt2
+  device: cuda
+  dtype: bfloat16
+```
+
+Then run as usual:
+
+```bash
+python main.py --config configs/default.yaml
+```
+
+If you want to use `transformers==4.52.4` in the same env:
+
+```bash
+pip install --upgrade transformers==4.52.4
+```
+
+and keep `model.family: gpt2_efficient`.
 
 Run time: **~2 minutes** for 50 samples on a single CUDA device (gpt2-small,
 fp32). Output tree:
@@ -186,7 +220,7 @@ Red = positive relevance, blue = negative.
 ## Notes for Part 2 / Part 3
 
 - **Part 2** — sequentially fine-tune GPT-2 on SQuAD_v2 → SciQ, then re-run
-  `src/explain/attnlrp.py` on identical prompts and diff pre / post-FT
+  `src/explain/attnlrp_gpt2_efficient.py` on identical prompts and diff pre / post-FT
   per-layer relevance. The `outputs/relevance/sample_NNN.pt` files cache the
   pre-FT tensors so the diff is just a load + subtract.
 - **Part 3** — fine-tune two separate models (Model A on SciQ, Model B on
