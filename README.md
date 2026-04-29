@@ -51,7 +51,7 @@ conda activate llm-xai-paper
 pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu121
 
 # baseline deps (efficient path)
-pip install transformers==4.46.2 accelerate tabulate matplotlib zennit \
+pip install transformers==4.52.4 accelerate tabulate matplotlib zennit \
             datasets pyyaml tqdm
 pip install lxt   # = LRP-eXplains-Transformers
 ```
@@ -150,12 +150,6 @@ Then run as usual:
 python main.py --config configs/gpt2_efficient.yaml
 ```
 
-If you want to use `transformers==4.52.4` in the same env:
-
-```bash
-pip install --upgrade transformers==4.52.4
-```
-
 and keep `model.family: gpt2_efficient`.
 
 Run time: **~2 minutes** for 50 samples on a single CUDA device (gpt2-small,
@@ -182,13 +176,13 @@ on identical inputs.
 
 | Metric | AttnLRP | Random baseline | Faithful? |
 |---|---:|---:|---|
-| `auc_morf` (lower better) | **0.0068** | 0.0499 | ✅ AttnLRP ≪ random |
-| `auc_lerf` (higher better) | **0.0775** | 0.0567 | ✅ AttnLRP > random |
+| `auc_morf` (lower better) | **0.0077** | 0.0499 | ✅ AttnLRP ≪ random |
+| `auc_lerf` (higher better) | **0.0839** | 0.0567 | ✅ AttnLRP > random |
 
 Interpretation:
 
 - **MoRF**: removing the most-relevant tokens collapses the target probability
-  ~7× faster under AttnLRP than under random ranking — relevance scores really
+  ~6.5× faster under AttnLRP than under random ranking — relevance scores really
   do identify the tokens the model relies on.
 - **LeRF**: removing the least-relevant tokens degrades the prediction much less
   under AttnLRP than under random — the bottom of the AttnLRP ranking is
