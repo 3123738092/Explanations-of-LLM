@@ -1,0 +1,23 @@
+model:
+  family: gpt2_efficient
+  name: gpt2
+  device: cuda
+  dtype: bfloat16
+
+data:
+  dataset: squad_v2
+  split: validation
+  num_samples: 50
+  max_length: 512
+
+explain:
+  method: attnlrp_gpt2_efficient
+  target: argmax_next
+
+faithfulness:
+  steps: 20
+  strategy: morf
+
+output:
+  dir: outputs-gpt2-efficient
+  figures_dir: outputs-gpt2-efficient/figures

@@ -1,4 +1,4 @@
-"""Entry point for Part 1: AttnLRP on GPT-2 over SQuAD_v2.
+"""Entry point for Part 1: AttnLRP over SQuAD_v2.
 
 For every sample we
   1. run AttnLRP and save token + per-layer relevance heatmaps
@@ -18,8 +18,14 @@ from tqdm import tqdm
 
 from src.data.squad_loader import load_squad_v2_samples
 from src.evaluate.faithfulness import faithfulness_score
-from src.explain.attnlrp import explain_sample
+from src.explain.attnlrp import explain_sample as explain_gpt2_sample
+from src.explain.attnlrp_gpt2_efficient import (
+    explain_sample as explain_gpt2_efficient_sample,
+)
+from src.explain.attnlrp_llama import explain_sample as explain_llama_sample
+from src.models.gpt2_efficient_wrapper import load_gpt2_efficient_with_attnlrp
 from src.models.gpt2_wrapper import load_gpt2_with_attnlrp
+from src.models.llama_wrapper import load_llama_with_attnlrp
 from src.visualize.heatmap import save_layer_heatmap, save_token_heatmap
 
 
@@ -32,6 +38,25 @@ def _faith(model, tokenizer, result, device, steps, strategy):
 def _random_result(result: dict, generator: torch.Generator) -> dict:
     rand_rel = torch.randn(result["token_relevance"].shape, generator=generator)
     return {**result, "token_relevance": rand_rel}
+
+
+def _load_model_and_explainer(model_cfg: dict):
+    family = model_cfg.get("family", "gpt2")
+    name = model_cfg["name"]
+    device = model_cfg["device"]
+
+    if family == "gpt2":
+        return (*load_gpt2_with_attnlrp(name, device), explain_gpt2_sample)
+    if family == "gpt2_efficient":
+        dtype = model_cfg.get("dtype", "bfloat16")
+        return (
+            *load_gpt2_efficient_with_attnlrp(name, device, dtype=dtype),
+            explain_gpt2_efficient_sample,
+        )
+    if family == "llama":
+        dtype = model_cfg.get("dtype", "bfloat16")
+        return (*load_llama_with_attnlrp(name, device, dtype=dtype), explain_llama_sample)
+    raise ValueError(f"Unsupported model family: {family}")
 
 
 def main() -> None:
@@ -51,7 +76,7 @@ def main() -> None:
     steps = cfg["faithfulness"]["steps"]
     rng = torch.Generator().manual_seed(0)
 
-    model, tokenizer = load_gpt2_with_attnlrp(cfg["model"]["name"], device)
+    model, tokenizer, explain_sample = _load_model_and_explainer(cfg["model"])
     samples = load_squad_v2_samples(
         num_samples=cfg["data"]["num_samples"],
         max_length=cfg["data"]["max_length"],
