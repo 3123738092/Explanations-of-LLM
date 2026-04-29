@@ -16,7 +16,7 @@ with a random-relevance baseline.
 
 ```
 code/
-├── configs/default.yaml         # experiment config
+├── configs/gpt2_efficient.yaml  # experiment config
 ├── main.py                      # Part 1 entry point
 ├── requirements.txt
 ├── scripts/run_part1.sh
@@ -129,7 +129,7 @@ auc_lerf       >  auc_random_lerf
 
 ```bash
 conda activate llm-xai-paper
-python main.py --config configs/default.yaml
+python main.py --config configs/gpt2_efficient.yaml
 ```
 
 ### Run the efficient GPT-2 path
@@ -147,7 +147,7 @@ model:
 Then run as usual:
 
 ```bash
-python main.py --config configs/default.yaml
+python main.py --config configs/gpt2_efficient.yaml
 ```
 
 If you want to use `transformers==4.52.4` in the same env:
