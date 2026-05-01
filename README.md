@@ -20,6 +20,11 @@ code/
 ├── main.py                      # Part 1 entry point
 ├── requirements.txt
 ├── scripts/run_part1.sh
+├── scripts/run_nohup_examples.sh
+├── scripts/train_gpt2_qa.py
+├── scripts/plot_trainer_loss.py
+├── scripts/compare_attnlrp_gpt2.py
+├── scripts/compare_attnlrp_gpt2_layerwise.py
 ├── third_party/
 │   └── LRP-eXplains-Transformers/   # upstream repo (read-only)
 └── src/
@@ -201,6 +206,85 @@ for the first sample (target token `Normandy`); `sample_000_layers.png` shows
 the same sample as an L × T grid (12 GPT-2 transformer blocks × prompt tokens).
 Red = positive relevance, blue = negative.
 
+## Part 2/3 Workflow (Fine-tune + Compare)
+
+The project now includes training/evaluation scripts migrated from the
+`LRP-eXplains-Transformers` workspace and adapted to this repo.
+
+### Data / model placement
+
+- Local GPT-2 base model: `model/gpt2-model`
+- SQuAD files: `data/SQuAD/train-v2.0.json`, `data/SQuAD/dev-v2.0.json`
+- SciQ files: `data/sciq/*.parquet`
+
+### 1) Fine-tune GPT-2 on SQuAD or SciQ
+
+```bash
+python scripts/train_gpt2_qa.py \
+  --dataset squad_v2 \
+  --model_path model/gpt2-model \
+  --data_dir data \
+  --output_dir outputs/modelA_squad_gpt2
+```
+
+```bash
+python scripts/train_gpt2_qa.py \
+  --dataset sciq \
+  --model_path model/gpt2-model \
+  --data_dir data \
+  --output_dir outputs/modelB_sciq_gpt2
+```
+
+### 2) Plot train/eval loss
+
+```bash
+python scripts/plot_trainer_loss.py --output_dir outputs/modelA_squad_gpt2
+python scripts/plot_trainer_loss.py --output_dir outputs/modelB_sciq_gpt2
+```
+
+Outputs:
+- `train_eval_loss_plot.png`
+- `train_eval_loss_points.csv`
+
+### 3) Token-level AttnLRP comparison (base vs finetuned)
+
+```bash
+python scripts/compare_attnlrp_gpt2.py \
+  --base_model model/gpt2-model \
+  --finetuned_model outputs/modelA_squad_gpt2/checkpoint-8145 \
+  --squad_dev data/SQuAD/dev-v2.0.json \
+  --out_dir outputs/attnlrp_compare_50cases \
+  --num_cases 50
+```
+
+### 4) Layer-wise AttnLRP metrics and plots (base vs finetuned)
+
+```bash
+python scripts/compare_attnlrp_gpt2_layerwise.py \
+  --base_model model/gpt2-model \
+  --finetuned_model outputs/modelA_squad_gpt2/checkpoint-8145 \
+  --squad_dev data/SQuAD/dev-v2.0.json \
+  --out_dir outputs/attnlrp_layerwise_compare_50cases \
+  --num_cases 50
+```
+
+Main outputs:
+- `summary.json`
+- `per_layer_metrics.csv`
+- `global_layerwise_stats.png`
+- `cases/case_XXX.json` (per-case per-layer/per-token relevance)
+
+### 5) Nohup templates
+
+Use:
+
+```bash
+bash scripts/run_nohup_examples.sh
+```
+
+This launches smoke/full fine-tuning, loss-plot generation, and AttnLRP compare
+jobs in background with logs under `logs/`.
+
 ## Part 1 checklist
 
 - [x] Load GPT-2 base & tokenizer (lxt `GPT2LMHeadModel`)
@@ -211,13 +295,65 @@ Red = positive relevance, blue = negative.
 - [x] Visualise token / layer heatmaps
 - [x] Faithfulness MoRF + LeRF AUC + random baseline
 
-## Notes for Part 2 / Part 3
+## Notes for Part 2 
 
-- **Part 2** — sequentially fine-tune GPT-2 on SQuAD_v2 → SciQ, then re-run
-  `src/explain/attnlrp_gpt2_efficient.py` on identical prompts and diff pre / post-FT
-  per-layer relevance. The `outputs/relevance/sample_NNN.pt` files cache the
-  pre-FT tensors so the diff is just a load + subtract.
-- **Part 3** — fine-tune two separate models (Model A on SciQ, Model B on
-  SQuAD_v2), modify the AttnLRP propagation to attribute the explained logit
-  to **parameter** tensors (not input tokens), and compare per-layer parameter
-  relevance between A and B.
+- Fine-tune the GPT-2 model on the SQuAD_v2 and SciQ datasets using the Sequential Fine-Tuning algorithm. Subsequently, apply the AttnLRP algorithm to investigate the changes in the GPT-2 model before and after fine-tuning. Specifically, for the same input data, compute the contribution values of each input token at each layer for both the pre- and post-fine-tuned models. Compare the differences in these contribution values to obtain conclusions about the impact of fine-tuning
+
+## Experiment Metrics (Updated)
+
+This section records the latest reproducible faithfulness metrics under the
+same AttnLRP evaluation logic:
+
+- `lxt.efficient.monkey_patch(modeling_gpt2)`
+- contrastive relevance seed for GPT-2
+- token-flipping AUC with `steps=20`
+- random-relevance baseline with fixed seed
+
+### A) SQuAD-50 fixed sample comparison
+
+Source: `outputs/faithfulness_readme50_compare/summary.json`
+
+| Model | auc_morf | auc_random_morf | auc_lerf | auc_random_lerf | Verdict |
+|---|---:|---:|---:|---:|---|
+| base_gpt2 | 0.0059 | 0.0470 | 0.0903 | 0.0514 | ✅ pass |
+| modelA_squad checkpoint-1600 | 0.0092 | 0.0548 | 0.1879 | 0.0735 | ✅ pass |
+| modelA_squad final | 0.0092 | 0.0548 | 0.1879 | 0.0735 | ✅ pass |
+| modelB_sciq checkpoint-1200 | 0.0083 | 0.0185 | 0.0395 | 0.0235 | ✅ pass |
+| modelB_sciq final | 0.0083 | 0.0185 | 0.0395 | 0.0235 | ✅ pass |
+
+Criterion: `auc_morf < auc_random_morf` and `auc_lerf > auc_random_lerf`.
+
+### B) SciQ-50 fixed sample comparison
+
+Source: `outputs/faithfulness_sciq_fixed_compare/summary.json`
+
+| Model | auc_morf | auc_random_morf | auc_lerf | auc_random_lerf | Verdict |
+|---|---:|---:|---:|---:|---|
+| base_gpt2 | 0.0102 | 0.0883 | 0.2641 | 0.0714 | ✅ pass |
+| modelA_squad checkpoint-1600 | 0.0151 | 0.0875 | 0.3376 | 0.0849 | ✅ pass |
+| modelA_squad final | 0.0151 | 0.0875 | 0.3378 | 0.0849 | ✅ pass |
+| modelB_sciq final | 0.0114 | 0.0720 | 0.2231 | 0.0781 | ✅ pass |
+
+One incomplete checkpoint (`modelB_sciq checkpoint-700`) was skipped
+automatically and logged in:
+`outputs/faithfulness_sciq_fixed_compare/skipped.json`.
+
+## Interpretation
+
+1. All listed models pass the faithfulness sanity check on both fixed-sample
+   evaluations.
+2. On SQuAD-50, `modelA_squad` has much higher `auc_lerf` than base, suggesting
+   stronger concentration of relevance on the most important tokens.
+3. On SciQ-50, both base and fine-tuned models show clear separation from random;
+   `modelA_squad` gives the highest `auc_lerf` in this run.
+4. `checkpoint` and `final` are nearly identical where both are available,
+   indicating training had mostly converged by the saved checkpoint.
+
+## Process Notes
+
+1. Reproducibility depends on using the AttnLRP path (`monkey_patch`) rather than
+   plain gradients. Earlier mismatches were traced to missing patch calls.
+2. For offline environments, local model/data paths were used to avoid hub
+   download failures.
+3. Some intermediate checkpoint folders may be structurally incomplete (missing
+   tokenizer files). Evaluation scripts now skip such folders and record them.

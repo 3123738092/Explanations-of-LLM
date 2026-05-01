@@ -22,10 +22,8 @@ from src.explain.attnlrp import explain_sample as explain_gpt2_sample
 from src.explain.attnlrp_gpt2_efficient import (
     explain_sample as explain_gpt2_efficient_sample,
 )
-from src.explain.attnlrp_llama import explain_sample as explain_llama_sample
 from src.models.gpt2_efficient_wrapper import load_gpt2_efficient_with_attnlrp
 from src.models.gpt2_wrapper import load_gpt2_with_attnlrp
-from src.models.llama_wrapper import load_llama_with_attnlrp
 from src.visualize.heatmap import save_layer_heatmap, save_token_heatmap
 
 
@@ -54,6 +52,8 @@ def _load_model_and_explainer(model_cfg: dict):
             explain_gpt2_efficient_sample,
         )
     if family == "llama":
+        from src.explain.attnlrp_llama import explain_sample as explain_llama_sample
+        from src.models.llama_wrapper import load_llama_with_attnlrp
         dtype = model_cfg.get("dtype", "bfloat16")
         return (*load_llama_with_attnlrp(name, device, dtype=dtype), explain_llama_sample)
     raise ValueError(f"Unsupported model family: {family}")

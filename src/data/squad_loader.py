@@ -1,6 +1,8 @@
 """SQuAD_v2 loader: format each example as a GPT-2 QA prompt."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Optional
 
 from datasets import load_dataset
@@ -16,7 +18,26 @@ def load_squad_v2_samples(
     tokenizer=None,
     split: str = "validation",
 ) -> list[dict]:
-    ds = load_dataset("squad_v2", split=split)
+    try:
+        ds = load_dataset("squad_v2", split=split)
+    except Exception:
+        # Offline fallback: use local SQuAD files if HF dataset hub is unavailable.
+        local_root = Path("/home/Feng/code/LRP-eXplains-Transformers/data/SQuAD")
+        local_file = local_root / ("dev-v2.0.json" if split == "validation" else "train-v2.0.json")
+        obj = json.loads(local_file.read_text(encoding="utf-8"))
+        ds = []
+        for article in obj.get("data", []):
+            for para in article.get("paragraphs", []):
+                context = para.get("context", "")
+                for qa in para.get("qas", []):
+                    ds.append(
+                        {
+                            "id": qa.get("id", ""),
+                            "question": qa.get("question", ""),
+                            "context": context,
+                            "answers": {"text": [a.get("text", "") for a in qa.get("answers", [])]},
+                        }
+                    )
     samples: list[dict] = []
     for ex in ds:
         prompt = format_prompt(ex["question"], ex["context"])
