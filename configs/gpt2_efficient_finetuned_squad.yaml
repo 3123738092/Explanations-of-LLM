@@ -1,0 +1,32 @@
+# GPT-2（SQuAD 微调 checkpoint）+ efficient AttnLRP（lxt monkey_patch）
+# 模型目录需包含 config.json、model.safetensors 与 tokenizer 文件。
+model:
+  family: gpt2_efficient
+  # 相对路径相对于仓库根目录（含 configs/ 的上一级）；也可用绝对路径。
+  name: FT-model/modelA_squad_gpt2_checkpoint-1600_inference_only
+  device: cuda
+  # checkpoint 导出为 float32；若显存紧张可改为 bfloat16
+  dtype: float32
+
+data:
+  dataset: squad_v2
+  split: validation
+  num_samples: 1
+  max_length: 512
+
+explain:
+  method: attnlrp_gpt2_efficient
+  target: argmax_next
+
+parameter_attribution:
+  enabled: true
+  save_tensors: false
+  top_modules: 20
+
+faithfulness:
+  steps: 20
+  strategy: morf
+
+output:
+  dir: outputs-gpt2-ft-squad-1600
+  figures_dir: outputs-gpt2-ft-squad-1600/figures

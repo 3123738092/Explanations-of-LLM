@@ -18,15 +18,29 @@ from tqdm import tqdm
 
 from src.data.squad_loader import load_squad_v2_samples
 from src.evaluate.faithfulness import faithfulness_score
-from src.explain.attnlrp import explain_sample as explain_gpt2_sample
 from src.explain.attnlrp_gpt2_efficient import (
     explain_sample as explain_gpt2_efficient_sample,
 )
-from src.explain.attnlrp_llama import explain_sample as explain_llama_sample
 from src.models.gpt2_efficient_wrapper import load_gpt2_efficient_with_attnlrp
-from src.models.gpt2_wrapper import load_gpt2_with_attnlrp
-from src.models.llama_wrapper import load_llama_with_attnlrp
-from src.visualize.heatmap import save_layer_heatmap, save_token_heatmap
+from src.visualize.heatmap import (
+    save_attention_head_heatmap,
+    save_layer_heatmap,
+    save_layer_parameter_trend,
+    save_token_heatmap,
+)
+
+
+def _resolve_pretrained_local_path(name: str, cfg_path: Path) -> str:
+    """Resolve local checkpoint dirs; leave Hugging Face hub ids (e.g. ``gpt2``) unchanged."""
+    path = Path(name)
+    if path.is_absolute():
+        return str(path.resolve())
+    repo_root = cfg_path.parent.parent if cfg_path.parent.name == "configs" else cfg_path.parent
+    for base in (repo_root, Path.cwd()):
+        candidate = (base / path).resolve()
+        if candidate.exists():
+            return str(candidate)
+    return name
 
 
 def _faith(model, tokenizer, result, device, steps, strategy):
@@ -45,36 +59,39 @@ def _load_model_and_explainer(model_cfg: dict):
     name = model_cfg["name"]
     device = model_cfg["device"]
 
-    if family == "gpt2":
-        return (*load_gpt2_with_attnlrp(name, device), explain_gpt2_sample)
     if family == "gpt2_efficient":
         dtype = model_cfg.get("dtype", "bfloat16")
         return (
             *load_gpt2_efficient_with_attnlrp(name, device, dtype=dtype),
             explain_gpt2_efficient_sample,
         )
-    if family == "llama":
-        dtype = model_cfg.get("dtype", "bfloat16")
-        return (*load_llama_with_attnlrp(name, device, dtype=dtype), explain_llama_sample)
     raise ValueError(f"Unsupported model family: {family}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--config", default="configs/gpt2_efficient.yaml")
     args = parser.parse_args()
 
-    cfg = yaml.safe_load(Path(args.config).read_text())
+    cfg_path = Path(args.config).resolve()
+    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg["model"]["name"] = _resolve_pretrained_local_path(cfg["model"]["name"], cfg_path)
     out_dir = Path(cfg["output"]["dir"])
     fig_dir = Path(cfg["output"]["figures_dir"])
     rel_dir = out_dir / "relevance"
+    param_dir = out_dir / "parameter_relevance"
     out_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
     rel_dir.mkdir(parents=True, exist_ok=True)
+    param_dir.mkdir(parents=True, exist_ok=True)
 
     device = cfg["model"]["device"]
     steps = cfg["faithfulness"]["steps"]
     rng = torch.Generator().manual_seed(0)
+    param_cfg = cfg.get("parameter_attribution", {})
+    param_enabled = bool(param_cfg.get("enabled", False))
+    save_parameter_tensors = bool(param_cfg.get("save_tensors", False))
+    top_parameter_modules = int(param_cfg.get("top_modules", 20))
 
     model, tokenizer, explain_sample = _load_model_and_explainer(cfg["model"])
     samples = load_squad_v2_samples(
@@ -86,7 +103,14 @@ def main() -> None:
 
     records = []
     for i, sample in enumerate(tqdm(samples, desc="AttnLRP")):
-        result = explain_sample(model, tokenizer, sample, device=device)
+        result = explain_sample(
+            model,
+            tokenizer,
+            sample,
+            device=device,
+            parameter_attribution=param_enabled,
+            save_parameter_tensors=save_parameter_tensors,
+        )
 
         save_token_heatmap(
             result["tokens"], result["token_relevance"],
@@ -99,17 +123,43 @@ def main() -> None:
             title=f"Sample {i} — per-layer relevance",
         )
 
-        torch.save(
-            {
-                "tokens": result["tokens"],
-                "token_relevance": result["token_relevance"],
-                "layer_relevance": result["layer_relevance"],
+        relevance_payload = {
+            "tokens": result["tokens"],
+            "token_relevance": result["token_relevance"],
+            "layer_relevance": result["layer_relevance"],
+            "target_token": result["target_token"],
+            "target_id": result["target_id"],
+            "input_ids": result["input_ids"],
+        }
+        torch.save(relevance_payload, rel_dir / f"sample_{i:03d}.pt")
+
+        parameter_record = {}
+        if param_enabled:
+            parameter_summary = result["parameter_summary"]
+            save_attention_head_heatmap(
+                parameter_summary["attention_head_abs"],
+                out_path=fig_dir / f"sample_{i:03d}_param_heads.png",
+                title=f"Sample {i} — attention-head parameter relevance",
+            )
+            save_layer_parameter_trend(
+                parameter_summary["layer_component_abs"],
+                parameter_summary["component_names"],
+                out_path=fig_dir / f"sample_{i:03d}_param_layers.png",
+                title=f"Sample {i} — layer-wise parameter relevance",
+            )
+            parameter_payload = {
                 "target_token": result["target_token"],
                 "target_id": result["target_id"],
-                "input_ids": result["input_ids"],
-            },
-            rel_dir / f"sample_{i:03d}.pt",
-        )
+                "parameter_summary": parameter_summary,
+            }
+            if "parameter_relevance" in result:
+                parameter_payload["parameter_relevance"] = result["parameter_relevance"]
+            torch.save(parameter_payload, param_dir / f"sample_{i:03d}.pt")
+            parameter_record = {
+                "top_parameter_modules": parameter_summary["module_records"][
+                    :top_parameter_modules
+                ]
+            }
 
         rand_result = _random_result(result, rng)
         records.append({
@@ -120,6 +170,7 @@ def main() -> None:
             "auc_lerf": _faith(model, tokenizer, result, device, steps, "lerf"),
             "auc_random_morf": _faith(model, tokenizer, rand_result, device, steps, "morf"),
             "auc_random_lerf": _faith(model, tokenizer, rand_result, device, steps, "lerf"),
+            **parameter_record,
         })
 
     keys = ["auc_morf", "auc_lerf", "auc_random_morf", "auc_random_lerf"]
@@ -143,6 +194,12 @@ def main() -> None:
     print(f"\nSummary written to: {summary_path}")
     print(f"Figures: {fig_dir}")
     print(f"Per-sample relevance tensors: {rel_dir}")
+    if param_enabled:
+        print(f"Per-sample parameter relevance summaries: {param_dir}")
+        if save_parameter_tensors:
+            print("Full parameter contribution tensors were saved.")
+        else:
+            print("Full parameter tensors were skipped; set parameter_attribution.save_tensors=true to save them.")
 
 
 if __name__ == "__main__":

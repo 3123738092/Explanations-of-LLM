@@ -7,12 +7,19 @@ model:
 data:
   dataset: squad_v2
   split: validation
-  num_samples: 50
+  num_samples: 1
   max_length: 512
 
 explain:
   method: attnlrp_gpt2_efficient
   target: argmax_next
+
+parameter_attribution:
+  enabled: true
+  # Saving full param.grad * param tensors is exact but large
+  # (hundreds of MB per GPT-2 sample). Aggregated summaries are always saved.
+  save_tensors: false
+  top_modules: 20
 
 faithfulness:
   steps: 20

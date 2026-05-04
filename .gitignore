@@ -13,3 +13,5 @@ outputs/
 .vscode/
 .idea/
 .DS_Store
+outputs*
+FT-model
