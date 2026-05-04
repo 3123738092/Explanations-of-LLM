@@ -2,29 +2,38 @@
 import argparse
 import json
 import os
+import random
+import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
+import numpy as np
 import pandas as pd
-from datasets import Dataset
 import torch
+from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
+    default_data_collator,
 )
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-def format_squad_samples(path: Path) -> List[Dict[str, str]]:
+from src.evaluate.faithfulness import faithfulness_score
+
+
+def format_squad_samples(path: Path, eos_token: str) -> List[Dict[str, str]]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)["data"]
 
     samples = []
     for article in data:
         for paragraph in article.get("paragraphs", []):
-            context = paragraph.get("context", "")
+            context = paragraph.get("context", "").strip()
             for qa in paragraph.get("qas", []):
                 question = qa.get("question", "").strip()
                 if qa.get("is_impossible", False):
@@ -33,30 +42,79 @@ def format_squad_samples(path: Path) -> List[Dict[str, str]]:
                     answers = qa.get("answers", [])
                     answer = answers[0]["text"].strip() if answers else "unanswerable"
 
-                text = f"Question: {question}\nContext: {context}\nAnswer: {answer}"
-                samples.append({"text": text})
+                prompt = f"Question: {question}\nContext: {context}\nAnswer:"
+                target = f" {answer}{eos_token}"
+                samples.append(
+                    {
+                        "prompt": prompt,
+                        "target": target,
+                        "eval_target": answer,
+                        "task": "squad_text",
+                    }
+                )
     return samples
 
 
-def format_sciq_samples(path: Path) -> List[Dict[str, str]]:
+def _shuffle_options(correct: str, distractors: List[str], seed: int) -> Tuple[List[str], str]:
+    options = [correct] + distractors
+    rng = random.Random(seed)
+    rng.shuffle(options)
+    letters = ["A", "B", "C", "D"]
+    letter_map = {opt: letters[i] for i, opt in enumerate(options)}
+    return options, letter_map[correct]
+
+
+def format_sciq_samples(path: Path, eos_token: str, shuffle_seed: int) -> List[Dict[str, str]]:
     df = pd.read_parquet(path)
     samples = []
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         question = str(row["question"]).strip()
         context = str(row["support"]).strip()
-        answer = str(row["correct_answer"]).strip()
-        text = f"Question: {question}\nContext: {context}\nAnswer: {answer}"
-        samples.append({"text": text})
+        correct = str(row["correct_answer"]).strip()
+        distractors = [
+            str(row["distractor1"]).strip(),
+            str(row["distractor2"]).strip(),
+            str(row["distractor3"]).strip(),
+        ]
+
+        options, correct_letter = _shuffle_options(correct, distractors, shuffle_seed + int(idx))
+        letters = ["A", "B", "C", "D"]
+        option_lines = "\n".join([f"{letters[i]}. {options[i]}" for i in range(4)])
+
+        prompt = f"Question: {question}\nContext: {context}\nOptions:\n{option_lines}\nAnswer:"
+        target = f" {correct_letter}{eos_token}"
+        samples.append(
+            {
+                "prompt": prompt,
+                "target": target,
+                "eval_target": correct_letter,
+                "task": "sciq_letter",
+            }
+        )
     return samples
 
 
-def build_datasets(data_dir: Path, dataset_name: str, max_train_samples: int = 0, max_eval_samples: int = 0):
+def build_datasets(
+    data_dir: Path,
+    dataset_name: str,
+    eos_token: str,
+    max_train_samples: int = 0,
+    max_eval_samples: int = 0,
+    sciq_shuffle_seed: int = 42,
+):
     if dataset_name == "squad_v2":
-        train_samples = format_squad_samples(data_dir / "SQuAD" / "train-v2.0.json")
-        eval_samples = format_squad_samples(data_dir / "SQuAD" / "dev-v2.0.json")
+        train_samples = format_squad_samples(data_dir / "SQuAD" / "train-v2.0.json", eos_token=eos_token)
+        dev_samples = format_squad_samples(data_dir / "SQuAD" / "dev-v2.0.json", eos_token=eos_token)
+        # Use tail 1/3 of dev split for faster evaluation while keeping training set unchanged.
+        start = (2 * len(dev_samples)) // 3
+        eval_samples = dev_samples[start:]
     elif dataset_name == "sciq":
-        train_samples = format_sciq_samples(data_dir / "sciq" / "train-00000-of-00001.parquet")
-        eval_samples = format_sciq_samples(data_dir / "sciq" / "validation-00000-of-00001.parquet")
+        train_samples = format_sciq_samples(
+            data_dir / "sciq" / "train-00000-of-00001.parquet", eos_token=eos_token, shuffle_seed=sciq_shuffle_seed
+        )
+        eval_samples = format_sciq_samples(
+            data_dir / "sciq" / "validation-00000-of-00001.parquet", eos_token=eos_token, shuffle_seed=sciq_shuffle_seed
+        )
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
@@ -73,31 +131,6 @@ def _prob_of_target(model, input_ids: torch.Tensor, target_id: int) -> float:
         logits = model(input_ids=input_ids, use_cache=False).logits[0, -1]
         probs = torch.softmax(logits.float(), dim=-1)
         return float(probs[target_id].item())
-
-
-def _faithfulness_auc(
-    model,
-    tokenizer,
-    input_ids: torch.Tensor,
-    token_relevance: torch.Tensor,
-    target_id: int,
-    steps: int,
-    strategy: str,
-) -> float:
-    mask_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-    t_len = input_ids.shape[1]
-    descending = strategy == "morf"
-    order = torch.argsort(token_relevance, descending=descending)
-
-    probs = [_prob_of_target(model, input_ids, target_id)]
-    step_positions = torch.linspace(0, t_len, steps + 1).long().tolist()[1:]
-    for k in step_positions:
-        perturbed = input_ids.clone()
-        perturbed[0, order[:k]] = mask_id
-        probs.append(_prob_of_target(model, perturbed, target_id))
-
-    probs_t = torch.tensor(probs)
-    return float(torch.trapz(probs_t).item() / (len(probs_t) - 1))
 
 
 def _compute_attnlrp_relevance(model, tokenizer, text: str, device: str, max_length: int):
@@ -123,6 +156,50 @@ def _compute_attnlrp_relevance(model, tokenizer, text: str, device: str, max_len
 
     token_relevance = (input_embeds.grad * input_embeds).float().sum(-1).detach().cpu()[0]
     return input_ids.detach(), token_relevance, target_id
+
+
+def build_compute_metrics_fn(tokenizer):
+    def compute_metrics(eval_pred):
+        logits, labels = eval_pred
+        preds = np.array(logits)
+        labels = np.array(labels)
+
+        # With preprocess_logits_for_metrics enabled, preds are already token ids.
+        # Depending on accelerate/transformers versions, shape may be flattened.
+        if preds.ndim == labels.ndim + 1:
+            preds = np.argmax(preds, axis=-1)
+        if preds.shape != labels.shape and preds.size == labels.size:
+            preds = preds.reshape(labels.shape)
+
+        # CausalLM predicts next token: align prediction at t with label at t+1.
+        if preds.ndim == 2 and labels.ndim == 2 and preds.shape[1] > 1 and labels.shape[1] > 1:
+            preds = preds[:, :-1]
+            labels = labels[:, 1:]
+
+        mask = labels != -100
+        if mask.sum() == 0:
+            return {"eval_token_acc": 0.0, "eval_seq_acc": 0.0}
+
+        token_acc = float((preds[mask] == labels[mask]).mean())
+
+        seq_match = []
+        for i in range(labels.shape[0]):
+            m = mask[i]
+            if not m.any():
+                continue
+            seq_match.append(bool(np.array_equal(preds[i][m], labels[i][m])))
+        seq_acc = float(np.mean(seq_match)) if seq_match else 0.0
+
+        return {"eval_token_acc": token_acc, "eval_seq_acc": seq_acc}
+
+    return compute_metrics
+
+
+def preprocess_logits_for_metrics(logits, labels):
+    # Reduce cached eval tensors from [B, T, V] logits to [B, T] token ids.
+    if isinstance(logits, tuple):
+        logits = logits[0]
+    return torch.argmax(logits, dim=-1)
 
 
 class FaithfulnessTrainer(Trainer):
@@ -159,7 +236,6 @@ class FaithfulnessTrainer(Trainer):
         if n == 0:
             return {}
 
-        # Randomly sample N eval texts each evaluation; seed + global step keeps it reproducible.
         sample_rng = torch.Generator().manual_seed(self.faithfulness_sample_seed + int(self.state.global_step))
         perm = torch.randperm(len(self.eval_texts), generator=sample_rng).tolist()
         sampled_texts = [self.eval_texts[i] for i in perm[:n]]
@@ -173,26 +249,56 @@ class FaithfulnessTrainer(Trainer):
                     model, self.faith_tokenizer, text, device=device, max_length=self.max_length
                 )
 
+            explain = {
+                "input_ids": input_ids,
+                "token_relevance": token_rel,
+                "target_id": target_id,
+            }
             auc_morf.append(
-                _faithfulness_auc(
-                    model, self.faith_tokenizer, input_ids, token_rel, target_id, self.faithfulness_steps, "morf"
+                faithfulness_score(
+                    model,
+                    self.faith_tokenizer,
+                    explain_result=explain,
+                    device=device,
+                    steps=self.faithfulness_steps,
+                    strategy="morf",
                 )
             )
             auc_lerf.append(
-                _faithfulness_auc(
-                    model, self.faith_tokenizer, input_ids, token_rel, target_id, self.faithfulness_steps, "lerf"
+                faithfulness_score(
+                    model,
+                    self.faith_tokenizer,
+                    explain_result=explain,
+                    device=device,
+                    steps=self.faithfulness_steps,
+                    strategy="lerf",
                 )
             )
 
             rand_rel = torch.randn(token_rel.shape, generator=rng)
+            rand_explain = {
+                "input_ids": input_ids,
+                "token_relevance": rand_rel,
+                "target_id": target_id,
+            }
             auc_random_morf.append(
-                _faithfulness_auc(
-                    model, self.faith_tokenizer, input_ids, rand_rel, target_id, self.faithfulness_steps, "morf"
+                faithfulness_score(
+                    model,
+                    self.faith_tokenizer,
+                    explain_result=rand_explain,
+                    device=device,
+                    steps=self.faithfulness_steps,
+                    strategy="morf",
                 )
             )
             auc_random_lerf.append(
-                _faithfulness_auc(
-                    model, self.faith_tokenizer, input_ids, rand_rel, target_id, self.faithfulness_steps, "lerf"
+                faithfulness_score(
+                    model,
+                    self.faith_tokenizer,
+                    explain_result=rand_explain,
+                    device=device,
+                    steps=self.faithfulness_steps,
+                    strategy="lerf",
                 )
             )
 
@@ -239,6 +345,7 @@ def main():
     parser.add_argument("--faithfulness_eval_samples", type=int, default=8)
     parser.add_argument("--faithfulness_steps", type=int, default=20)
     parser.add_argument("--faithfulness_sample_seed", type=int, default=42)
+    parser.add_argument("--sciq_shuffle_seed", type=int, default=42)
     parser.add_argument("--disable_faithfulness_eval", action="store_true")
     args = parser.parse_args()
 
@@ -258,25 +365,56 @@ def main():
     train_ds, eval_ds = build_datasets(
         data_dir=data_dir,
         dataset_name=args.dataset,
+        eos_token=tokenizer.eos_token,
         max_train_samples=args.max_train_samples,
         max_eval_samples=args.max_eval_samples,
+        sciq_shuffle_seed=args.sciq_shuffle_seed,
     )
-    eval_texts = [x["text"] for x in eval_ds]
+
+    # Faithfulness should be measured on model inputs, not prompt+gold target (prevents leakage).
+    eval_texts = [x["prompt"] for x in eval_ds]
 
     def tokenize_fn(batch):
-        out = tokenizer(
-            batch["text"],
-            truncation=True,
-            padding="max_length",
-            max_length=args.max_length,
-        )
-        out["labels"] = out["input_ids"].copy()
-        return out
+        input_ids_list = []
+        attn_list = []
+        labels_list = []
 
-    train_ds = train_ds.map(tokenize_fn, batched=True, remove_columns=["text"])
-    eval_ds = eval_ds.map(tokenize_fn, batched=True, remove_columns=["text"])
+        for prompt, target in zip(batch["prompt"], batch["target"]):
+            prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+            target_ids = tokenizer(target, add_special_tokens=False)["input_ids"]
 
-    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+            # Keep supervision tokens intact; truncate prompt first when too long.
+            if len(target_ids) >= args.max_length:
+                target_ids = target_ids[-args.max_length :]
+                prompt_ids = []
+            else:
+                max_prompt_len = args.max_length - len(target_ids)
+                if len(prompt_ids) > max_prompt_len:
+                    prompt_ids = prompt_ids[-max_prompt_len:]
+
+            input_ids = prompt_ids + target_ids
+            labels = [-100] * len(prompt_ids) + target_ids
+
+            attention_mask = [1] * len(input_ids)
+
+            pad_len = args.max_length - len(input_ids)
+            if pad_len > 0:
+                input_ids = input_ids + [tokenizer.pad_token_id] * pad_len
+                attention_mask = attention_mask + [0] * pad_len
+                labels = labels + [-100] * pad_len
+
+            input_ids_list.append(input_ids)
+            attn_list.append(attention_mask)
+            labels_list.append(labels)
+
+        return {
+            "input_ids": input_ids_list,
+            "attention_mask": attn_list,
+            "labels": labels_list,
+        }
+
+    train_ds = train_ds.map(tokenize_fn, batched=True, remove_columns=["prompt", "target", "eval_target", "task"])
+    eval_ds = eval_ds.map(tokenize_fn, batched=True, remove_columns=["prompt", "target", "eval_target", "task"])
 
     training_args = TrainingArguments(
         output_dir=str(output_dir),
@@ -291,7 +429,7 @@ def main():
         logging_steps=args.logging_steps,
         save_strategy="steps",
         save_steps=args.save_steps,
-        eval_strategy="steps",
+        evaluation_strategy="steps",
         eval_steps=args.eval_steps,
         save_total_limit=args.save_total_limit,
         load_best_model_at_end=True,
@@ -309,8 +447,10 @@ def main():
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        data_collator=data_collator,
+        data_collator=default_data_collator,
         tokenizer=tokenizer,
+        compute_metrics=build_compute_metrics_fn(tokenizer),
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         eval_texts=eval_texts,
         faithfulness_eval_samples=args.faithfulness_eval_samples,
         faithfulness_steps=args.faithfulness_steps,
@@ -332,7 +472,12 @@ def main():
         "faithfulness_eval_samples": args.faithfulness_eval_samples,
         "faithfulness_steps": args.faithfulness_steps,
         "faithfulness_sample_seed": args.faithfulness_sample_seed,
+        "sciq_shuffle_seed": args.sciq_shuffle_seed,
         "compute_faithfulness_on_eval": (not args.disable_faithfulness_eval),
+        "prompting": {
+            "squad": "Question/Context/Answer with target answer+EOS; loss only on answer span",
+            "sciq": "Question/Context/Options/Answer with target option-letter+EOS; loss only on answer span",
+        },
     }
     (output_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
