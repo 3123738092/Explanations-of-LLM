@@ -99,6 +99,7 @@ def _collect_parameter_relevance(model, save_tensors: bool = False) -> dict:
 
     layer_component_signed = torch.zeros(n_layers, n_components)
     layer_component_abs = torch.zeros(n_layers, n_components)
+    layer_component_numel = torch.zeros(n_layers, n_components, dtype=torch.int64)
     attention_head_abs = torch.zeros(n_layers, n_heads)
     module_records = []
     tensors = {} if save_tensors else None
@@ -117,6 +118,7 @@ def _collect_parameter_relevance(model, save_tensors: bool = False) -> dict:
             comp_idx = component_to_idx[component]
             layer_component_signed[layer_idx, comp_idx] += signed_sum
             layer_component_abs[layer_idx, comp_idx] += abs_sum
+            layer_component_numel[layer_idx, comp_idx] += param.numel()
 
         _add_gpt2_head_relevance(model, name, relevance, attention_head_abs)
 
@@ -134,11 +136,19 @@ def _collect_parameter_relevance(model, save_tensors: bool = False) -> dict:
         if tensors is not None:
             tensors[name] = relevance.cpu()
 
+    layer_component_abs_mean = torch.zeros(n_layers, n_components)
+    valid_mask = layer_component_numel > 0
+    layer_component_abs_mean[valid_mask] = (
+        layer_component_abs[valid_mask].float()
+        / layer_component_numel[valid_mask].float()
+    )
+
     module_records.sort(key=lambda item: item["abs_sum"], reverse=True)
     summary = {
         "component_names": list(_COMPONENTS),
         "layer_component_signed": layer_component_signed,
         "layer_component_abs": layer_component_abs,
+        "layer_component_abs_mean": layer_component_abs_mean,
         "attention_head_abs": attention_head_abs,
         "module_records": module_records,
     }

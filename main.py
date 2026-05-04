@@ -105,7 +105,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg_path = Path(args.config).resolve()
-    cfg = yaml.safe_load(cfg_path.read_text())
+    cfg = yaml.safe_load(cfg_path.read_text(encoding='utf-8'))
     cfg["model"]["name"] = _resolve_pretrained_local_path(cfg["model"]["name"], cfg_path)
     out_dir = Path(cfg["output"]["dir"])
     fig_dir = Path(cfg["output"]["figures_dir"])
@@ -174,7 +174,10 @@ def main() -> None:
                 title=f"Sample {i} — attention-head parameter relevance",
             )
             save_layer_parameter_trend(
-                parameter_summary["layer_component_abs"],
+                (
+                    parameter_summary["layer_component_abs"],
+                    parameter_summary["layer_component_abs_mean"],
+                ),
                 parameter_summary["component_names"],
                 out_path=fig_param_layers / f"sample_{i:03d}_param_layers.png",
                 title=f"Sample {i} — layer-wise parameter relevance",
