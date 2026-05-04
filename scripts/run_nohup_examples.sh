@@ -43,35 +43,20 @@ nohup "$ENV_PY" scripts/train_gpt2_qa.py \
   > logs/sciq_smoke.log 2>&1 &
 
 # 2) Full fine-tuning
-nohup "$ENV_PY" scripts/train_gpt2_qa.py \
-  --dataset squad_v2 \
-  --model_path "$MODEL_PATH" \
-  --data_dir data \
-  --output_dir outputs/modelA_squad_gpt2 \
-  --num_train_epochs 1.0 \
-  --per_device_train_batch_size 16 \
-  --per_device_eval_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --max_length 512 \
-  --save_steps 200 \
-  --eval_steps 200 \
-  --logging_steps 20 \
-  > logs/squad_full.log 2>&1 &
-
-nohup /home/Feng/.conda/envs/lxt311/bin/python -u scripts/train_gpt2_qa.py \
+nohup env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True /home/Feng/.conda/envs/lxt311/bin/python -u scripts/train_gpt2_qa.py \
   --dataset squad_v2 --model_path /home/Feng/code/LRP-eXplains-Transformers/model/gpt2-model \
   --data_dir /home/Feng/code/LRP-eXplains-Transformers/data \
-  --output_dir outputs/modelA_squad_gpt2_full_faith \
+  --output_dir outputs/modelA_squad_gpt2_full_faith_fix \
   --num_train_epochs 2.0 \
-  --per_device_train_batch_size 16 \
-  --per_device_eval_batch_size 16 \
+  --per_device_train_batch_size 4 \
+  --per_device_eval_batch_size 1 \
   --gradient_accumulation_steps 1 \
   --max_length 512 \
   --save_steps 200 \
   --eval_steps 200 \
   --logging_steps 20 \
   --save_total_limit 1 \
-  --faithfulness_eval_samples 50 \
+  --faithfulness_eval_samples 16 \
   --faithfulness_steps 20 \
   --faithfulness_sample_seed 42 > logs/squad_full_faith.log 2>&1 &
 
@@ -79,24 +64,9 @@ nohup /home/Feng/.conda/envs/lxt311/bin/python -u scripts/train_gpt2_qa.py \
  --dataset sciq --model_path /home/Feng/code/LRP-eXplains-Transformers/model/gpt2-model \
  --data_dir /home/Feng/code/LRP-eXplains-Transformers/data \
  --output_dir outputs/modelB_sciq_gpt2_full_faith \
- --num_train_epochs 4.0 --per_device_train_batch_size 16 --per_device_eval_batch_size 16 \
+ --num_train_epochs 4.0 --per_device_train_batch_size 16 --per_device_eval_batch_size 8 \
  --gradient_accumulation_steps 1 --max_length 512 --save_steps 100 --eval_steps 100 \
  --logging_steps 20 --save_total_limit 1 --faithfulness_eval_samples 50 --faithfulness_steps 20 --faithfulness_sample_seed 42 > logs/sciq_full_faith.log 2>&1 &
-
-nohup "$ENV_PY" scripts/train_gpt2_qa.py \
-  --dataset sciq \
-  --model_path "$MODEL_PATH" \
-  --data_dir data \
-  --output_dir outputs/modelB_sciq_gpt2 \
-  --num_train_epochs 2.0 \
-  --per_device_train_batch_size 16 \
-  --per_device_eval_batch_size 16 \
-  --gradient_accumulation_steps 1 \
-  --max_length 512 \
-  --save_steps 100 \
-  --eval_steps 100 \
-  --logging_steps 20 \
-  > logs/sciq_full.log 2>&1 &
 
 # 3) Loss plots
 nohup "$ENV_PY" scripts/plot_trainer_loss.py \

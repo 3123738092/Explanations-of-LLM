@@ -1,0 +1,21 @@
+model:
+  family: gpt2
+  name: /home/Feng/code/Explanations-of-LLM/outputs/modelA_squad_gpt2_full_faith_fix/checkpoint-36200
+  tokenizer_name: /home/Feng/code/LRP-eXplains-Transformers/model/gpt2-model
+  device: cuda
+
+data:
+  dataset: squad_v2
+  split: validation
+  num_samples: 50
+  max_length: 512
+
+faithfulness:
+  steps: 20
+
+parameter_attribution:
+  enabled: false
+
+output:
+  dir: /home/Feng/code/Explanations-of-LLM/outputs/main_q_squad_ckpt36200_50
+  figures_dir: /home/Feng/code/Explanations-of-LLM/outputs/main_q_squad_ckpt36200_50/figures

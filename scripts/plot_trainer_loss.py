@@ -27,6 +27,8 @@ def main():
     parser.add_argument('--out_csv', default='', help='Output CSV path (default: <output_dir>/train_eval_loss_points.csv)')
     parser.add_argument('--faith_out_png', default='', help='Faithfulness PNG path (default: <output_dir>/faithfulness_auc_plot.png)')
     parser.add_argument('--faith_out_csv', default='', help='Faithfulness CSV path (default: <output_dir>/faithfulness_auc_points.csv)')
+    parser.add_argument('--acc_out_png', default='', help='Accuracy PNG path (default: <output_dir>/eval_accuracy_plot.png)')
+    parser.add_argument('--acc_out_csv', default='', help='Accuracy CSV path (default: <output_dir>/eval_accuracy_points.csv)')
     parser.add_argument('--title', default='', help='Plot title')
     args = parser.parse_args()
 
@@ -37,6 +39,8 @@ def main():
     out_csv = Path(args.out_csv) if args.out_csv else output_dir / 'train_eval_loss_points.csv'
     faith_out_png = Path(args.faith_out_png) if args.faith_out_png else output_dir / 'faithfulness_auc_plot.png'
     faith_out_csv = Path(args.faith_out_csv) if args.faith_out_csv else output_dir / 'faithfulness_auc_points.csv'
+    acc_out_png = Path(args.acc_out_png) if args.acc_out_png else output_dir / 'eval_accuracy_plot.png'
+    acc_out_csv = Path(args.acc_out_csv) if args.acc_out_csv else output_dir / 'eval_accuracy_points.csv'
 
     obj = json.loads(trainer_state_path.read_text(encoding='utf-8'))
     log = obj.get('log_history', [])
@@ -54,6 +58,15 @@ def main():
         )
         for x in log
         if 'eval_auc_morf' in x and 'step' in x
+    ]
+    acc = [
+        (
+            x.get('step'),
+            x.get('eval_token_acc'),
+            x.get('eval_seq_acc'),
+        )
+        for x in log
+        if 'eval_token_acc' in x and 'step' in x
     ]
 
     if not train and not evals:
@@ -110,15 +123,41 @@ def main():
             for row in faith:
                 f.write(','.join(str(v) for v in row) + '\n')
 
+    # Accuracy plot (token/sequence)
+    if acc:
+        plt.figure(figsize=(10, 5.2))
+        steps = [x[0] for x in acc]
+        token_acc = [x[1] for x in acc]
+        seq_acc = [x[2] for x in acc]
+
+        plt.plot(steps, token_acc, marker='o', linewidth=1.5, label='eval_token_acc')
+        plt.plot(steps, seq_acc, marker='s', linewidth=1.5, label='eval_seq_acc')
+        plt.title(f'Eval Accuracy Curve ({output_dir.name})')
+        plt.xlabel('Global Step')
+        plt.ylabel('Accuracy')
+        plt.ylim(0.0, 1.0)
+        plt.grid(alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(acc_out_png, dpi=180)
+
+        with acc_out_csv.open('w', encoding='utf-8') as f:
+            f.write('step,eval_token_acc,eval_seq_acc\n')
+            for row in acc:
+                f.write(','.join(str(v) for v in row) + '\n')
+
     print(json.dumps({
         'trainer_state': str(trainer_state_path),
         'train_points': len(train),
         'eval_points': len(evals),
         'faith_points': len(faith),
+        'acc_points': len(acc),
         'out_png': str(out_png),
         'out_csv': str(out_csv),
         'faith_out_png': str(faith_out_png) if faith else '',
-        'faith_out_csv': str(faith_out_csv) if faith else ''
+        'faith_out_csv': str(faith_out_csv) if faith else '',
+        'acc_out_png': str(acc_out_png) if acc else '',
+        'acc_out_csv': str(acc_out_csv) if acc else ''
     }, ensure_ascii=False))
 
 

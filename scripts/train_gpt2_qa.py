@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.evaluate.faithfulness import faithfulness_score
+from src.evaluate.main_q_metrics import evaluate_prompts_main_q
 
 
 def format_squad_samples(path: Path, eos_token: str) -> List[Dict[str, str]]:
@@ -133,31 +133,6 @@ def _prob_of_target(model, input_ids: torch.Tensor, target_id: int) -> float:
         return float(probs[target_id].item())
 
 
-def _compute_attnlrp_relevance(model, tokenizer, text: str, device: str, max_length: int):
-    enc = tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        max_length=max_length,
-        add_special_tokens=True,
-    )
-    input_ids = enc.input_ids.to(device)
-    input_embeds = model.get_input_embeddings()(input_ids).detach().requires_grad_(True)
-
-    model.zero_grad(set_to_none=True)
-    logits = model(inputs_embeds=input_embeds, use_cache=False).logits
-    last_logits = logits[0, -1, :]
-    target_id = int(torch.argmax(last_logits, dim=-1).item())
-
-    # Contrastive seed for GPT-2 explanation stability.
-    mask = torch.ones_like(last_logits) * (-1.0 / last_logits.numel())
-    mask[target_id] = 1.0
-    last_logits.backward(mask)
-
-    token_relevance = (input_embeds.grad * input_embeds).float().sum(-1).detach().cpu()[0]
-    return input_ids.detach(), token_relevance, target_id
-
-
 def build_compute_metrics_fn(tokenizer):
     def compute_metrics(eval_pred):
         logits, labels = eval_pred
@@ -223,6 +198,14 @@ class FaithfulnessTrainer(Trainer):
         self.faithfulness_sample_seed = faithfulness_sample_seed
         self.max_length = max_length
         self.compute_faithfulness_on_eval = compute_faithfulness_on_eval
+        # Fixed eval subset across all eval calls (no step-dependent resampling).
+        n = min(self.faithfulness_eval_samples, len(self.eval_texts))
+        if n > 0:
+            fixed_rng = torch.Generator().manual_seed(self.faithfulness_sample_seed)
+            perm = torch.randperm(len(self.eval_texts), generator=fixed_rng).tolist()
+            self.fixed_eval_texts = [self.eval_texts[i] for i in perm[:n]]
+        else:
+            self.fixed_eval_texts = []
 
     def _compute_faithfulness_metrics(self):
         if not self.compute_faithfulness_on_eval or self.faithfulness_eval_samples <= 0:
@@ -232,81 +215,24 @@ class FaithfulnessTrainer(Trainer):
         model.eval()
         device = str(next(model.parameters()).device)
 
-        n = min(self.faithfulness_eval_samples, len(self.eval_texts))
+        n = len(self.fixed_eval_texts)
         if n == 0:
             return {}
-
-        sample_rng = torch.Generator().manual_seed(self.faithfulness_sample_seed + int(self.state.global_step))
-        perm = torch.randperm(len(self.eval_texts), generator=sample_rng).tolist()
-        sampled_texts = [self.eval_texts[i] for i in perm[:n]]
-
-        rng = torch.Generator().manual_seed(self.faithfulness_sample_seed)
-        auc_morf, auc_lerf, auc_random_morf, auc_random_lerf = [], [], [], []
-
-        for text in sampled_texts:
-            with torch.enable_grad():
-                input_ids, token_rel, target_id = _compute_attnlrp_relevance(
-                    model, self.faith_tokenizer, text, device=device, max_length=self.max_length
-                )
-
-            explain = {
-                "input_ids": input_ids,
-                "token_relevance": token_rel,
-                "target_id": target_id,
-            }
-            auc_morf.append(
-                faithfulness_score(
-                    model,
-                    self.faith_tokenizer,
-                    explain_result=explain,
-                    device=device,
-                    steps=self.faithfulness_steps,
-                    strategy="morf",
-                )
-            )
-            auc_lerf.append(
-                faithfulness_score(
-                    model,
-                    self.faith_tokenizer,
-                    explain_result=explain,
-                    device=device,
-                    steps=self.faithfulness_steps,
-                    strategy="lerf",
-                )
-            )
-
-            rand_rel = torch.randn(token_rel.shape, generator=rng)
-            rand_explain = {
-                "input_ids": input_ids,
-                "token_relevance": rand_rel,
-                "target_id": target_id,
-            }
-            auc_random_morf.append(
-                faithfulness_score(
-                    model,
-                    self.faith_tokenizer,
-                    explain_result=rand_explain,
-                    device=device,
-                    steps=self.faithfulness_steps,
-                    strategy="morf",
-                )
-            )
-            auc_random_lerf.append(
-                faithfulness_score(
-                    model,
-                    self.faith_tokenizer,
-                    explain_result=rand_explain,
-                    device=device,
-                    steps=self.faithfulness_steps,
-                    strategy="lerf",
-                )
-            )
+        metrics = evaluate_prompts_main_q(
+            model=model,
+            tokenizer=self.faith_tokenizer,
+            prompts=self.fixed_eval_texts,
+            device=device,
+            max_length=self.max_length,
+            steps=self.faithfulness_steps,
+            random_seed=self.faithfulness_sample_seed,
+        )
 
         return {
-            "eval_auc_morf": float(sum(auc_morf) / len(auc_morf)),
-            "eval_auc_lerf": float(sum(auc_lerf) / len(auc_lerf)),
-            "eval_auc_random_morf": float(sum(auc_random_morf) / len(auc_random_morf)),
-            "eval_auc_random_lerf": float(sum(auc_random_lerf) / len(auc_random_lerf)),
+            "eval_auc_morf": metrics["auc_morf"],
+            "eval_auc_lerf": metrics["auc_lerf"],
+            "eval_auc_random_morf": metrics["auc_random_morf"],
+            "eval_auc_random_lerf": metrics["auc_random_lerf"],
             "eval_faithfulness_samples": float(n),
         }
 

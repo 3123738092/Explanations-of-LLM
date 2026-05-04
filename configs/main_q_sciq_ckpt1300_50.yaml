@@ -1,0 +1,22 @@
+model:
+  family: gpt2
+  name: /home/Feng/code/Explanations-of-LLM/outputs/modelB_sciq_gpt2_full_faith_fix/checkpoint-1300
+  tokenizer_name: /home/Feng/code/LRP-eXplains-Transformers/model/gpt2-model
+  device: cuda
+
+data:
+  dataset: sciq
+  split: validation
+  num_samples: 50
+  max_length: 512
+  sciq_parquet_path: /home/Feng/code/LRP-eXplains-Transformers/data/sciq/validation-00000-of-00001.parquet
+
+faithfulness:
+  steps: 20
+
+parameter_attribution:
+  enabled: false
+
+output:
+  dir: /home/Feng/code/Explanations-of-LLM/outputs/main_q_sciq_ckpt1300_50
+  figures_dir: /home/Feng/code/Explanations-of-LLM/outputs/main_q_sciq_ckpt1300_50/figures

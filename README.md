@@ -238,8 +238,8 @@ python scripts/train_gpt2_qa.py \
 ### 2) Plot train/eval loss
 
 ```bash
-python scripts/plot_trainer_loss.py --output_dir outputs/modelA_squad_gpt2
-python scripts/plot_trainer_loss.py --output_dir outputs/modelB_sciq_gpt2
+python scripts/plot_trainer_loss.py --output_dir outputs/modelA_squad_gpt2_full_faith_fix
+python scripts/plot_trainer_loss.py --output_dir outputs/modelB_sciq_gpt2_full_faith
 ```
 
 Outputs:
@@ -251,9 +251,9 @@ Outputs:
 ```bash
 python scripts/compare_attnlrp_gpt2.py \
   --base_model model/gpt2-model \
-  --finetuned_model outputs/modelA_squad_gpt2/checkpoint-8145 \
+  --finetuned_model outputs/modelB_sciq_gpt2_full_faith/checkpoint-8145 \
   --squad_dev data/SQuAD/dev-v2.0.json \
-  --out_dir outputs/attnlrp_compare_50cases \
+  --out_dir outputs/attnlrp_compare_50cases_new \
   --num_cases 50
 ```
 
