@@ -71,66 +71,77 @@ def save_layer_parameter_trend(
     layer_component_abs,
     component_names,
     out_path: Path,
-    title: str = "Layer-wise parameter relevance trend",
+    title: str = "Layer-wise parameter relevance",
 ) -> None:
-    """Dual-panel: total sum (top) and per-parameter mean (bottom)."""
-    layers = None
+    """Heatmap [Layers x Modules] with column-wise min-max + raw values in cells.
 
-    # Unpack tuple (sum, mean) or fall back to single-array sum
+    Each module column is independently min-max scaled to [0, 1] so colour
+    reveals *within-module* peak layers without one module drowning the others.
+    Raw absolute sums are printed in each cell for cross-module magnitude.
+    """
     if isinstance(layer_component_abs, tuple):
-        r_sum = _to_numpy(layer_component_abs[0]).astype(float)
-        r_mean = _to_numpy(layer_component_abs[1]).astype(float)
+        r = _to_numpy(layer_component_abs[0]).astype(float)
     else:
-        r_sum = _to_numpy(layer_component_abs).astype(float)
-        r_mean = None
+        r = _to_numpy(layer_component_abs).astype(float)
 
-    layers = np.arange(r_sum.shape[0])
-    colors = {
-        "attention": "#3366cc",
-        "mlp": "#dc3912",
-        "layernorm": "#109618",
-    }
+    L, C = r.shape
+    col_min = r.min(axis=0, keepdims=True)
+    col_max = np.maximum(r.max(axis=0, keepdims=True), 1e-12)
+    norm = (r - col_min) / (col_max - col_min)
 
-    n_panels = 1 if r_mean is None else 2
-    fig, axes = plt.subplots(n_panels, 1, figsize=(max(8.0, r_sum.shape[0] * 0.6), 4.5 * n_panels))
+    fig, ax = plt.subplots(figsize=(max(4.5, C * 1.3), max(4.0, L * 0.30)))
+    im = ax.imshow(norm, cmap="viridis", vmin=0.0, vmax=1.0, aspect="auto")
+    ax.set_xticks(range(C))
+    ax.set_xticklabels(component_names)
+    ax.set_yticks(range(L))
+    ax.set_yticklabels([f"L{i}" for i in range(L)], fontsize=8)
+    ax.set_xlabel("Module")
+    ax.set_ylabel("Transformer layer")
 
-    if n_panels == 1:
-        axes = [axes]
+    for i in range(L):
+        for j in range(C):
+            ax.text(j, i, f"{r[i, j]:.0f}", ha="center", va="center",
+                    color="white" if norm[i, j] < 0.5 else "black", fontsize=7)
 
-    # Panel 1: total sum (original)
-    norm_sum = r_sum / max(float(np.max(r_sum)), 1e-12)
-    ax0 = axes[0]
+    cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.04)
+    cbar.set_label("|relevance| sum, column-wise min-max")
+    ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def save_layer_param_line(
+    layer_component_abs,
+    component_names,
+    out_path: Path,
+    title: str = "Layer-wise parameter relevance (line chart)",
+) -> None:
+    """Per-component self-normalised line chart.
+
+    Each component curve is independently divided by its own max, so all three
+    span [0, 1] and their layer-wise *shapes* are directly comparable.
+    """
+    r = _to_numpy(layer_component_abs).astype(float)
+    L, C = r.shape
+    layers = np.arange(L)
+    colors = {"attention": "#3366cc", "mlp": "#dc3912", "layernorm": "#109618"}
+
+    fig, ax = plt.subplots(figsize=(max(8.0, L * 0.6), 4.5))
     for idx, name in enumerate(component_names):
-        ax0.plot(layers, norm_sum[:, idx], marker="o", linewidth=2.0,
-                 label=name, color=colors.get(name))
-    ax0.set_ylabel("Normalised total |relevance|")
-    ax0.set_ylim(bottom=0.0)
-    ax0.grid(True, linestyle="--", alpha=0.35)
-    ax0.legend(frameon=False, ncol=min(3, len(component_names)))
-    ax0.set_title(title + "  (total sum)")
-
-    # Panel 2: per-parameter mean (per-component normalization)
-    if r_mean is not None:
-        ax1 = axes[1]
-        for idx, name in enumerate(component_names):
-            comp_max = float(np.max(r_mean[:, idx]))
-            if comp_max < 1e-12:
-                continue
-            ax1.plot(layers, r_mean[:, idx] / comp_max, marker="s", linewidth=2.0,
-                     label=name, color=colors.get(name))
-        ax1.set_xticks(layers)
-        ax1.set_xticklabels([f"L{i}" for i in layers], fontsize=8)
-        ax1.set_xlabel("Transformer layers")
-        ax1.set_ylabel("Per-param |relevance|  (norm. per component)")
-        ax1.set_ylim(bottom=0.0)
-        ax1.grid(True, linestyle="--", alpha=0.35)
-        ax1.legend(frameon=False, ncol=min(3, len(component_names)))
-        ax1.set_title("Per-parameter mean — each component self-normalised")
-    else:
-        axes[0].set_xticks(layers)
-        axes[0].set_xticklabels([f"L{i}" for i in layers], fontsize=8)
-        axes[0].set_xlabel("Transformer layers")
-
+        comp_max = float(np.max(r[:, idx]))
+        if comp_max < 1e-12:
+            continue
+        ax.plot(layers, r[:, idx] / comp_max, marker="o", linewidth=2.0,
+                label=name, color=colors.get(name))
+    ax.set_xticks(layers)
+    ax.set_xticklabels([f"L{i}" for i in layers], fontsize=8)
+    ax.set_xlabel("Transformer layers")
+    ax.set_ylabel("Per-component self-normalised |relevance|")
+    ax.set_ylim(bottom=0.0)
+    ax.grid(True, linestyle="--", alpha=0.35)
+    ax.legend(frameon=False, ncol=min(3, C))
+    ax.set_title(title)
     fig.tight_layout()
     fig.savefig(out_path, dpi=180)
     plt.close(fig)

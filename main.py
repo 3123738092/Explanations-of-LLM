@@ -26,6 +26,7 @@ from src.models.gpt2_efficient_wrapper import load_gpt2_efficient_with_attnlrp
 from src.visualize.heatmap import (
     save_attention_head_heatmap,
     save_layer_heatmap,
+    save_layer_param_line,
     save_layer_parameter_trend,
     save_token_heatmap,
 )
@@ -116,8 +117,10 @@ def main() -> None:
     fig_tokens = fig_dir / "tokens"
     fig_layers = fig_dir / "layers"
     fig_param_heads = fig_dir / "parameter_heads"
-    fig_param_layers = fig_dir / "parameter_layers"
-    for d in (fig_tokens, fig_layers, fig_param_heads, fig_param_layers):
+    fig_param_layers_line = fig_dir / "parameter_layers_line"
+    fig_param_layers_block = fig_dir / "parameter_layers_block"
+    for d in (fig_tokens, fig_layers, fig_param_heads,
+              fig_param_layers_line, fig_param_layers_block):
         d.mkdir(parents=True, exist_ok=True)
     rel_dir.mkdir(parents=True, exist_ok=True)
     param_dir.mkdir(parents=True, exist_ok=True)
@@ -173,14 +176,17 @@ def main() -> None:
                 out_path=fig_param_heads / f"sample_{i:03d}_param_heads.png",
                 title=f"Sample {i} — attention-head parameter relevance",
             )
-            save_layer_parameter_trend(
-                (
-                    parameter_summary["layer_component_abs"],
-                    parameter_summary["layer_component_abs_mean"],
-                ),
+            save_layer_param_line(
+                parameter_summary["layer_component_abs"],
                 parameter_summary["component_names"],
-                out_path=fig_param_layers / f"sample_{i:03d}_param_layers.png",
-                title=f"Sample {i} — layer-wise parameter relevance",
+                out_path=fig_param_layers_line / f"sample_{i:03d}_param_layers_line.png",
+                title=f"Sample {i} — layer-wise parameter relevance (line chart)",
+            )
+            save_layer_parameter_trend(
+                parameter_summary["layer_component_abs"],
+                parameter_summary["component_names"],
+                out_path=fig_param_layers_block / f"sample_{i:03d}_param_layers_block.png",
+                title=f"Sample {i} — layer-wise parameter relevance (block)",
             )
             parameter_payload = {
                 "target_token": result["target_token"],
@@ -229,7 +235,7 @@ def main() -> None:
     print(f"\nSummary written to: {summary_path}")
     print(
         f"Figures: {fig_dir} "
-        f"(tokens/, layers/, parameter_heads/, parameter_layers/)"
+        f"(tokens/, layers/, parameter_heads/, parameter_layers_line/, parameter_layers_block/)"
     )
     print(f"Per-sample relevance tensors: {rel_dir}")
     if param_enabled:
