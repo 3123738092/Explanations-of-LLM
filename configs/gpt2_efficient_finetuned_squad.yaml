@@ -11,7 +11,7 @@ model:
 data:
   dataset: squad_v2
   split: validation
-  num_samples: 1
+  num_samples: 50
   max_length: 512
 
 explain:

@@ -1,0 +1,40 @@
+# GPT-2（SciQ 微调 checkpoint）+ efficient AttnLRP（lxt monkey_patch）
+# 提示格式与 train_gpt2_qa.py 中 format_sciq_samples 一致（四选一字母 + 打乱选项）。
+# 选项打乱种子默认与代码一致（42，等价未写 sciq_shuffle_seed）；若微调时改过 --sciq_shuffle_seed，请在 data 下显式写 sciq_shuffle_seed。
+#
+# modelB 目录通常仅有 pytorch_model.bin / config.json，无 tokenizer 文件，
+# 故用 Hub 上的 gpt2 tokenizer（词表与 GPT-2 兼容）。
+model:
+  family: gpt2_efficient
+  name: FT-model/modelB_sciq_1300_qafix
+  tokenizer_name: gpt2
+  device: cuda
+  dtype: float32
+
+data:
+  dataset: sciq
+  split: validation
+  num_samples: 50
+  max_length: 512
+  hf_dataset: allenai/sciq
+  # 若需与本地 parquet 完全一致（与 train_gpt2_qa 同一文件），取消注释并指向仓库根目录下的相对路径：
+  # sciq_parquet_path: data/sciq/validation-00000-of-00001.parquet
+  # 与微调 --sciq_shuffle_seed 一致；打乱方式为 shuffle_seed + 样本行索引
+  sciq_shuffle_seed: 42
+
+explain:
+  method: attnlrp_gpt2_efficient
+  target: argmax_next
+
+parameter_attribution:
+  enabled: true
+  save_tensors: false
+  top_modules: 20
+
+faithfulness:
+  steps: 20
+  strategy: morf
+
+output:
+  dir: outputs-gpt2-ft-sciq-1300
+  figures_dir: outputs-gpt2-ft-sciq-1300/figures

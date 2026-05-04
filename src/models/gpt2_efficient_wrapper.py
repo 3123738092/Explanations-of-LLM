@@ -19,10 +19,12 @@ def load_gpt2_efficient_with_attnlrp(
     name: str = "gpt2",
     device: str = "cuda",
     dtype: str = "bfloat16",
+    tokenizer_name: str | None = None,
 ):
     monkey_patch(modeling_gpt2, verbose=False)
 
-    tokenizer = GPT2TokenizerFast.from_pretrained(name)
+    tok_src = tokenizer_name if tokenizer_name else name
+    tokenizer = GPT2TokenizerFast.from_pretrained(tok_src)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

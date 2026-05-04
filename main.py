@@ -16,6 +16,7 @@ import torch
 import yaml
 from tqdm import tqdm
 
+from src.data.sciq_loader import load_sciq_samples
 from src.data.squad_loader import load_squad_v2_samples
 from src.evaluate.faithfulness import faithfulness_score
 from src.explain.attnlrp_gpt2_efficient import (
@@ -61,11 +62,41 @@ def _load_model_and_explainer(model_cfg: dict):
 
     if family == "gpt2_efficient":
         dtype = model_cfg.get("dtype", "bfloat16")
+        tokenizer_name = model_cfg.get("tokenizer_name")
         return (
-            *load_gpt2_efficient_with_attnlrp(name, device, dtype=dtype),
+            *load_gpt2_efficient_with_attnlrp(
+                name, device, dtype=dtype, tokenizer_name=tokenizer_name
+            ),
             explain_gpt2_efficient_sample,
         )
     raise ValueError(f"Unsupported model family: {family}")
+
+
+def _load_dataset_samples(cfg: dict, cfg_path: Path, tokenizer):
+    data_cfg = cfg["data"]
+    dataset = data_cfg.get("dataset", "squad_v2")
+    common = {
+        "num_samples": data_cfg["num_samples"],
+        "max_length": data_cfg["max_length"],
+        "tokenizer": tokenizer,
+        "split": data_cfg.get("split", "validation"),
+    }
+    if dataset == "squad_v2":
+        return load_squad_v2_samples(**common)
+    if dataset == "sciq":
+        parquet_raw = data_cfg.get("sciq_parquet_path")
+        parquet_path = None
+        if parquet_raw:
+            parquet_path = Path(
+                _resolve_pretrained_local_path(str(parquet_raw), cfg_path)
+            )
+        return load_sciq_samples(
+            **common,
+            shuffle_seed=int(data_cfg.get("sciq_shuffle_seed", 42)),
+            dataset_name=data_cfg.get("hf_dataset", "allenai/sciq"),
+            parquet_path=parquet_path,
+        )
+    raise ValueError(f"Unsupported data.dataset: {dataset}")
 
 
 def main() -> None:
@@ -82,6 +113,12 @@ def main() -> None:
     param_dir = out_dir / "parameter_relevance"
     out_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
+    fig_tokens = fig_dir / "tokens"
+    fig_layers = fig_dir / "layers"
+    fig_param_heads = fig_dir / "parameter_heads"
+    fig_param_layers = fig_dir / "parameter_layers"
+    for d in (fig_tokens, fig_layers, fig_param_heads, fig_param_layers):
+        d.mkdir(parents=True, exist_ok=True)
     rel_dir.mkdir(parents=True, exist_ok=True)
     param_dir.mkdir(parents=True, exist_ok=True)
 
@@ -94,12 +131,7 @@ def main() -> None:
     top_parameter_modules = int(param_cfg.get("top_modules", 20))
 
     model, tokenizer, explain_sample = _load_model_and_explainer(cfg["model"])
-    samples = load_squad_v2_samples(
-        num_samples=cfg["data"]["num_samples"],
-        max_length=cfg["data"]["max_length"],
-        tokenizer=tokenizer,
-        split=cfg["data"]["split"],
-    )
+    samples = _load_dataset_samples(cfg, cfg_path, tokenizer)
 
     records = []
     for i, sample in enumerate(tqdm(samples, desc="AttnLRP")):
@@ -114,12 +146,12 @@ def main() -> None:
 
         save_token_heatmap(
             result["tokens"], result["token_relevance"],
-            out_path=fig_dir / f"sample_{i:03d}_tokens.png",
+            out_path=fig_tokens / f"sample_{i:03d}_tokens.png",
             title=f"Sample {i} — target='{result['target_token']}'",
         )
         save_layer_heatmap(
             result["tokens"], result["layer_relevance"],
-            out_path=fig_dir / f"sample_{i:03d}_layers.png",
+            out_path=fig_layers / f"sample_{i:03d}_layers.png",
             title=f"Sample {i} — per-layer relevance",
         )
 
@@ -138,13 +170,13 @@ def main() -> None:
             parameter_summary = result["parameter_summary"]
             save_attention_head_heatmap(
                 parameter_summary["attention_head_abs"],
-                out_path=fig_dir / f"sample_{i:03d}_param_heads.png",
+                out_path=fig_param_heads / f"sample_{i:03d}_param_heads.png",
                 title=f"Sample {i} — attention-head parameter relevance",
             )
             save_layer_parameter_trend(
                 parameter_summary["layer_component_abs"],
                 parameter_summary["component_names"],
-                out_path=fig_dir / f"sample_{i:03d}_param_layers.png",
+                out_path=fig_param_layers / f"sample_{i:03d}_param_layers.png",
                 title=f"Sample {i} — layer-wise parameter relevance",
             )
             parameter_payload = {
@@ -192,7 +224,10 @@ def main() -> None:
     print("\nFaithfulness reading:")
     print("  AttnLRP is faithful if  auc_morf < auc_random_morf  AND  auc_lerf > auc_random_lerf")
     print(f"\nSummary written to: {summary_path}")
-    print(f"Figures: {fig_dir}")
+    print(
+        f"Figures: {fig_dir} "
+        f"(tokens/, layers/, parameter_heads/, parameter_layers/)"
+    )
     print(f"Per-sample relevance tensors: {rel_dir}")
     if param_enabled:
         print(f"Per-sample parameter relevance summaries: {param_dir}")
