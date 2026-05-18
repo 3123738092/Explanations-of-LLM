@@ -1,9 +1,7 @@
 # Team Work Allocation Statement
 
 **Course:** AIAA 4051 — Natural Language Processing
-**Instructor:** Prof. Yi Zhang
 **Project Option:** Topic 7 — Explanations of LLMs
-**Submission Date:** May 2026
 
 ---
 
