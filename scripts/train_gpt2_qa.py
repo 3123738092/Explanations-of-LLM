@@ -10,6 +10,19 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import torch
+
+# Transformers 4.52+ imports DTensor from torch.distributed.tensor when saving.
+# Torch 2.1 keeps the same class under torch.distributed._tensor, so expose
+# the alias when needed without affecting newer Torch versions.
+try:
+    import torch.distributed.tensor as _torch_distributed_tensor
+    from torch.distributed._tensor import DTensor as _TorchDTensor
+
+    if not hasattr(_torch_distributed_tensor, "DTensor"):
+        _torch_distributed_tensor.DTensor = _TorchDTensor
+except Exception:
+    pass
+
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -19,11 +32,20 @@ from transformers import (
     default_data_collator,
 )
 
+try:
+    import transformers.modeling_utils as _hf_modeling_utils
+    from torch.distributed._tensor import DTensor as _TorchDTensor
+
+    if not hasattr(_hf_modeling_utils, "DTensor"):
+        _hf_modeling_utils.DTensor = _TorchDTensor
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.evaluate.main_q_metrics import evaluate_prompts_main_q
+from src.evaluate.next_token_faithfulness import evaluate_next_token_faithfulness
 
 
 def format_squad_samples(path: Path, eos_token: str) -> List[Dict[str, str]]:
@@ -218,7 +240,7 @@ class FaithfulnessTrainer(Trainer):
         n = len(self.fixed_eval_texts)
         if n == 0:
             return {}
-        metrics = evaluate_prompts_main_q(
+        metrics = evaluate_next_token_faithfulness(
             model=model,
             tokenizer=self.faith_tokenizer,
             prompts=self.fixed_eval_texts,
@@ -355,7 +377,7 @@ def main():
         logging_steps=args.logging_steps,
         save_strategy="steps",
         save_steps=args.save_steps,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=args.eval_steps,
         save_total_limit=args.save_total_limit,
         load_best_model_at_end=True,

@@ -1,10 +1,10 @@
-"""Entry point for Part 1: AttnLRP over SQuAD_v2.
+"""Direct entry for GPT-2 AttnLRP explanation and faithfulness evaluation.
 
 For every sample we
-  1. run AttnLRP and save token + per-layer relevance heatmaps
-  2. evaluate faithfulness with MoRF and LeRF flipping
-  3. evaluate the same two flips with a random-relevance baseline
-  4. cache the relevance tensors as .pt for downstream analysis
+  1. run AttnLRP and save token/layer relevance heatmaps,
+  2. optionally save parameter-level relevance summaries,
+  3. evaluate MoRF/LeRF faithfulness against a random baseline, and
+  4. cache per-sample relevance tensors for later analysis.
 """
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ from src.evaluate.faithfulness import faithfulness_score
 from src.explain.attnlrp_gpt2_efficient import (
     explain_sample as explain_gpt2_efficient_sample,
 )
-from src.models.gpt2_efficient_wrapper import load_gpt2_efficient_with_attnlrp
-from src.visualize.heatmap import (
+from src.models.gpt2_attnlrp_loader import load_gpt2_efficient_with_attnlrp
+from src.visualize.relevance_plots import (
     save_attention_head_heatmap,
     save_layer_heatmap,
     save_layer_param_line,
@@ -45,7 +45,7 @@ def _resolve_pretrained_local_path(name: str, cfg_path: Path) -> str:
     return name
 
 
-def _faith(model, tokenizer, result, device, steps, strategy):
+def _faithfulness_auc(model, tokenizer, result, device, steps, strategy):
     return faithfulness_score(
         model, tokenizer, result, device=device, steps=steps, strategy=strategy
     )
@@ -101,7 +101,7 @@ def _load_dataset_samples(cfg: dict, cfg_path: Path, tokenizer):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Run GPT-2 AttnLRP explanations.")
     parser.add_argument("--config", default="configs/gpt2_efficient.yaml")
     args = parser.parse_args()
 
@@ -207,10 +207,10 @@ def main() -> None:
             "idx": i,
             "target": result["target_token"],
             "n_tokens": int(result["input_ids"].shape[1]),
-            "auc_morf": _faith(model, tokenizer, result, device, steps, "morf"),
-            "auc_lerf": _faith(model, tokenizer, result, device, steps, "lerf"),
-            "auc_random_morf": _faith(model, tokenizer, rand_result, device, steps, "morf"),
-            "auc_random_lerf": _faith(model, tokenizer, rand_result, device, steps, "lerf"),
+            "auc_morf": _faithfulness_auc(model, tokenizer, result, device, steps, "morf"),
+            "auc_lerf": _faithfulness_auc(model, tokenizer, result, device, steps, "lerf"),
+            "auc_random_morf": _faithfulness_auc(model, tokenizer, rand_result, device, steps, "morf"),
+            "auc_random_lerf": _faithfulness_auc(model, tokenizer, rand_result, device, steps, "lerf"),
             **parameter_record,
         })
 

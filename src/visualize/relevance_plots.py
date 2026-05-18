@@ -1,4 +1,4 @@
-"""Heatmap visualisations of token- and layer-level relevance."""
+"""Plot token, layer, attention-head, and parameter relevance figures."""
 from __future__ import annotations
 
 from pathlib import Path

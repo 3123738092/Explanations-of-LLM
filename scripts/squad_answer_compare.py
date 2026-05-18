@@ -1,11 +1,11 @@
-"""在 SQuAD v2 提示上用模型贪心生成答案，并与数据集中的标准答案对照。
+"""Compare greedy SQuAD v2 generations against gold answers.
 
-用法（与 main.py 相同配置）::
+Usage, with the same config style as main.py::
 
     cd Explanations-of-LLM
     python scripts/squad_answer_compare.py --config configs/gpt2_efficient_finetuned_squad.yaml
 
-可选：只跑前 N 条、调整续写长度、把结果写入 JSONL。
+Optional flags limit the number of samples, set generation length, and write JSONL output.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import torch
 import yaml
 
 from src.data.squad_loader import load_squad_v2_samples
-from src.models.gpt2_efficient_wrapper import load_gpt2_efficient_with_attnlrp
+from src.models.gpt2_attnlrp_loader import load_gpt2_efficient_with_attnlrp
 
 
 def _resolve_pretrained_local_path(name: str, cfg_path: Path) -> str:
@@ -41,7 +41,7 @@ def _resolve_pretrained_local_path(name: str, cfg_path: Path) -> str:
 
 
 def _normalize_squad_answer(s: str) -> str:
-    """与常见 SQuAD EM 预处理类似的轻量归一化（非官方实现，仅作粗匹配）。"""
+    """Lightweight normalization similar to common SQuAD EM preprocessing."""
 
     def remove_articles(text: str) -> str:
         return re.sub(r"\b(a|an|the)\b", " ", text)
@@ -56,7 +56,7 @@ def _normalize_squad_answer(s: str) -> str:
 
 
 def _generative_em(pred: str, gold: str | None) -> bool:
-    """不可答样本 gold 为 None：若预测里出现明显拒答词则记为可能正确（启发式）。"""
+    """Heuristic EM for generative answers, including unanswerable examples."""
     if gold is None:
         p = pred.lower()
         return any(
@@ -70,7 +70,7 @@ def _generative_em(pred: str, gold: str | None) -> bool:
 
 
 def _strip_generated_answer(raw: str) -> str:
-    """截断到第一个换行或明显结束，避免把下一句 context 混进来。"""
+    """Stop at the first newline or next prompt marker to avoid spillover text."""
     for sep in ("\n", "Question:", "Context:"):
         if sep in raw:
             raw = raw.split(sep, 1)[0]
@@ -78,11 +78,11 @@ def _strip_generated_answer(raw: str) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SQuAD greedy 生成 vs 标准答案")
+    parser = argparse.ArgumentParser(description="Compare SQuAD greedy generation against gold answers")
     parser.add_argument("--config", default="configs/gpt2_efficient.yaml")
-    parser.add_argument("--max_new_tokens", type=int, default=64, help="Answer: 之后续写的最大 token 数")
-    parser.add_argument("--limit", type=int, default=0, help="只跑前 N 条；0 表示用配置里的 num_samples")
-    parser.add_argument("--out", type=str, default="", help="可选：写入 JSONL 路径")
+    parser.add_argument("--max_new_tokens", type=int, default=64, help="Maximum new tokens after Answer:")
+    parser.add_argument("--limit", type=int, default=0, help="Run the first N samples; 0 uses data.num_samples from the config")
+    parser.add_argument("--out", type=str, default="", help="Optional JSONL output path")
     args = parser.parse_args()
 
     cfg_path = Path(args.config).resolve()
@@ -133,12 +133,12 @@ def main() -> None:
         }
         rows.append(row)
 
-        gold_s = "(不可答)" if gold is None else repr(gold)
-        print(f"[{i}] EM≈{em}  gold={gold_s}")
+        gold_s = "(unanswerable)" if gold is None else repr(gold)
+        print(f"[{i}] EM={em}  gold={gold_s}")
         print(f"    pred={repr(pred[:200])}{'...' if len(pred) > 200 else ''}")
 
     n = len(rows)
-    print(f"\n粗匹配准确率（启发式 EM）: {correct}/{n} = {correct / max(1, n):.2%}")
+    print(f"\nLoose match accuracy, heuristic EM: {correct}/{n} = {correct / max(1, n):.2%}")
 
     if args.out:
         out_path = Path(args.out)
@@ -146,7 +146,7 @@ def main() -> None:
         with out_path.open("w", encoding="utf-8") as f:
             for r in rows:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        print(f"已写入: {out_path.resolve()}")
+        print(f"Wrote: {out_path.resolve()}")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
-# GPT-2（SQuAD 微调 checkpoint）+ efficient AttnLRP（lxt monkey_patch）
-# 模型目录需包含 config.json、model.safetensors 与 tokenizer 文件。
+# GPT-2 SQuAD fine-tuned checkpoint + efficient AttnLRP via lxt monkey_patch.
+# The model directory must include config.json, model.safetensors, and tokenizer files.
 model:
   family: gpt2_efficient
-  # 相对路径相对于仓库根目录（含 configs/ 的上一级）；也可用绝对路径。
+  # Relative paths are resolved from the repository root. Absolute paths are also supported.
   name: FT-model/modelA_squad_gpt2_checkpoint-1600_inference_only
   device: cuda
-  # checkpoint 导出为 float32；若显存紧张可改为 bfloat16
+  # The checkpoint is exported as float32. Use bfloat16 if GPU memory is tight.
   dtype: float32
 
 data:

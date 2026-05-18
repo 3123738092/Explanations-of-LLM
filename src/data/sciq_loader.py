@@ -1,9 +1,9 @@
-"""SciQ loader: 与 ``train_gpt2_qa.format_sciq_samples`` 一致的 QA 提示格式。
+"""SciQ loader with the same QA prompt format as the fine-tuning script.
 
-提示模板::
-    Question: …\\nContext: …\\nOptions:\\nA. …\\n…\\nAnswer:
+Prompt template::
+    Question: <question>\nContext: <context>\nOptions:\nA. <option>\n...\nAnswer:
 
-选项顺序由 ``shuffle_seed + 行索引`` 固定随机打乱（与微调脚本一致）。
+The option order is shuffled deterministically with ``shuffle_seed + row_index``.
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def _rows_from_parquet(path: Path):
         import pandas as pd
     except ImportError as e:
         raise ImportError(
-            "读取 SciQ parquet 需要安装 pandas：pip install pandas"
+            "Reading a SciQ parquet file requires pandas: pip install pandas"
         ) from e
     df = pd.read_parquet(path)
     for idx, row in df.iterrows():
@@ -63,7 +63,7 @@ def load_sciq_samples(
     dataset_name: str = "allenai/sciq",
     parquet_path: str | Path | None = None,
 ) -> list[dict]:
-    """加载 SciQ 样本；``prompt`` 与微调时 CausalLM 前缀一致（不含答案）。"""
+    """Load SciQ samples with prompts that match the fine-tuning prefix."""
     samples: list[dict] = []
 
     if parquet_path is not None:
