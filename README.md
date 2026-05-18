@@ -13,6 +13,17 @@ and (3) **parameter-level attribution** aggregated by layer, component, and atte
 - [3] Blücher et al., *Decoupling pixel flipping and occlusion strategy for consistent XAI benchmarks*, 2024.
 - Reference implementation: <https://github.com/rachtibat/LRP-eXplains-Transformers>
 
+## Data
+
+Both datasets are publicly available and loaded automatically via `datasets.load_dataset()` from Hugging Face Hub — no manual download required.
+
+| Dataset | Description | Access | License |
+|---------|------------|--------|---------|
+| SQuAD v2 | Extractive QA, 130k train / 4k dev | [HuggingFace](https://huggingface.co/datasets/rajpurkar/squad_v2) | CC BY-SA 4.0 |
+| SciQ | 4-choice science MC, 12k train / 1k test | [HuggingFace](https://huggingface.co/datasets/allenai/sciq) | CC BY-NC 4.0 |
+
+**Model:** GPT-2 base (124M) — [openai-community/gpt2](https://huggingface.co/openai-community/gpt2)
+
 ## Project layout
 
 ```
