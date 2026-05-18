@@ -1,9 +1,10 @@
 # Explanations of LLM — AttnLRP on GPT-2
 
-NLP course project (topic 7). **Part 1** reproduces AttnLRP [Achtibat et al., ICML 2024]
-on SQuAD_v2 with GPT-2, computes per-token + per-layer relevance, visualises them,
-and evaluates faithfulness via MoRF / LeRF token-flipping AUC [Blücher et al., 2024]
-with a random-relevance baseline.
+NLP course project (Topic 7). We apply **AttnLRP** [Achtibat et al., ICML 2024] to GPT-2 at
+three levels: tokens, the effect of fine-tuning, and model parameters. Key contributions:
+(1) a **contrastive gradient masking** fix for GPT-2's negative-logit sign-flip artifact,
+(2) token-level faithfulness evaluation before and after fine-tuning on **both SQuAD v2 and SciQ**,
+and (3) **parameter-level attribution** aggregated by layer, component, and attention head.
 
 ## References
 
@@ -15,42 +16,58 @@ with a random-relevance baseline.
 ## Project layout
 
 ```
-code/
+Explanations-of-LLM/
 ├── configs/
-│   ├── gpt2_efficient.yaml                    # base GPT-2 / SQuAD config
-│   ├── gpt2_efficient_finetuned_squad.yaml    # SQuAD fine-tuned config
-│   └── gpt2_efficient_finetuned_sciq.yaml     # SciQ fine-tuned config
-├── main.py                                    # direct Part 1 / Part 3 entry point
+│   ├── gpt2_efficient.yaml                    # base GPT-2 on SQuAD v2
+│   ├── gpt2_efficient_finetuned_squad.yaml    # FT-SQuAD checkpoint
+│   └── gpt2_efficient_finetuned_sciq.yaml     # FT-SciQ checkpoint
+├── main.py                                    # Parts 1 & 3 entry point
 ├── requirements.txt
-├── RUNNING.md                                 # runnable commands for Parts 1-3
+├── README.md
+├── RUNNING.md                                 # all runnable commands
+├── Team_Work_Allocation_Statement_LLM.md
+├── figures/                                   # results & visualizations (38 files)
+│   ├── fig_signfix_before.png / after.png     # sign-fix demo
+│   ├── fig_squad_tokens_*.png                 # SQuAD token comparisons
+│   ├── fig_squad_layers_*.png                 # SQuAD layer heatmaps
+│   ├── fig_sciq_tokens_*.png                  # SciQ token comparisons
+│   ├── fig_loss_curves.png                    # training loss
+│   ├── fig_accuracy.png                       # token accuracy
+│   ├── fig_faithfulness_auc.png               # MoRF/LeRF over training
+│   ├── fig_gaps_over_steps.png                # comprehensiveness & sufficiency
+│   ├── fig_params_squad_*.png                 # SQuAD parameter attribution
+│   ├── fig_params_sciq_*.png                  # SciQ parameter attribution
+│   ├── fig_case_*_heads.png                   # head-level case studies
+│   ├── sample_NNN_param_heads.png (×8)        # appendix head maps
+│   ├── heatmap_sample_NNN.pdf (×8)            # appendix token PDFs
+│   └── faithfulness_*.json (×4)               # per-experiment AUC summaries
 ├── scripts/
 │   ├── train_gpt2_qa.py                       # Part 2 fine-tuning
-│   ├── squad_answer_compare.py                # SQuAD generation check
-│   └── plot_finetune.py                       # report training-curve plots
+│   ├── plot_finetune.py                       # training-curve plots
+│   ├── squad_answer_compare.py                # SQuAD generation comparison
+│   ├── test_mask.py                           # lxt PDF heatmaps (contrastive)
+│   ├── test_no_mask.py                        # lxt PDF heatmaps (no mask)
+│   └── visualize_everest_prompt.py            # Everest QA demo heatmaps
 ├── third_party/
-│   └── LRP-eXplains-Transformers/             # upstream repo fallback
+│   └── LRP-eXplains-Transformers/             # vendored lxt fallback
 └── src/
-    ├── data/                                  # SQuAD / SciQ prompt loaders
-    ├── models/gpt2_attnlrp_loader.py          # GPT-2 + lxt efficient monkey_patch
-    ├── explain/attnlrp_gpt2_efficient.py      # token/layer AttnLRP flow
-    ├── explain/parameter_attribution.py       # Part 3 parameter attribution
-    ├── evaluate/faithfulness.py               # MoRF / LeRF AUC
-    ├── evaluate/next_token_faithfulness.py    # Part 2 eval helper
-    └── visualize/relevance_plots.py           # token, layer, parameter plots
+    ├── data/
+    │   ├── squad_loader.py                    # SQuAD v2 prompt loader
+    │   └── sciq_loader.py                     # SciQ prompt loader
+    ├── models/
+    │   └── gpt2_attnlrp_loader.py             # GPT-2 + lxt monkey_patch
+    ├── explain/
+    │   ├── attnlrp_gpt2_efficient.py          # token/layer AttnLRP (contrastive)
+    │   ├── attnlrp_gpt2_efficient_Part1.py    # Part 1 variant (no mask)
+    │   └── parameter_attribution.py           # Part 3 parameter attribution
+    ├── evaluate/
+    │   ├── faithfulness.py                    # MoRF / LeRF AUC
+    │   └── next_token_faithfulness.py         # Part 2 eval helper
+    └── visualize/
+        └── relevance_plots.py                 # all figure functions
 ```
 
 ## Setup
-
-This repo uses the GPT-2 **efficient** AttnLRP path:
-
-- `src/models/gpt2_attnlrp_loader.py`
-- `src/explain/attnlrp_gpt2_efficient.py`
-
-### Version notes (transformers)
-
-- Use `model.family: gpt2_efficient` (see config below).
-- Newer Transformers (e.g. `transformers==4.52.4`) should be used with this
-  efficient path (`lxt.efficient.monkey_patch`).
 
 ```bash
 conda create -n llm-xai-paper python=3.10 -y
@@ -58,177 +75,193 @@ conda activate llm-xai-paper
 pip install -r requirements.txt
 ```
 
-If Hugging Face or GitHub downloads are slow on the server, run:
+If Hugging Face or GitHub downloads are slow on the server:
 
 ```bash
 source /etc/network_turbo
 ```
 
-Verify the env:
+## How it works
+
+### AttnLRP with contrastive gradient masking
+
+We load GPT-2 and patch it via `lxt.efficient.monkey_patch`, then propagate LRP relevance
+through a single backward pass. The key fix for GPT-2 is the contrastive gradient seed:
 
 ```python
-from lxt.efficient import monkey_patch  # must import cleanly
+contrastive_seed = torch.full_like(next_token_logits, -1.0 / V)  # V = vocab size
+contrastive_seed[target_id] = 1.0
+next_token_logits.backward(contrastive_seed)
 ```
 
-## Reproduction details (Part 1)
+GPT-2's logits are predominantly negative due to tied embeddings and large-vocabulary
+suppression. A plain `max_logits.backward()` produces inverted relevance signs and
+reversed MoRF/LeRF ordering. The contrastive mask sets the target gradient to +1 and
+all others to −1/V, which is mathematically equivalent to explaining
+`softmax(y)_t − mean(softmax(y))` — see `figures/fig_signfix_before.png` and
+`figures/fig_signfix_after.png` for a before/after comparison.
 
-### Algorithm
-
-We do **not** re-implement the LRP rules. We load GPT-2 and patch the Hugging Face
-implementation via `lxt.efficient.monkey_patch`, then propagate relevance via
-PyTorch autograd:
-
-```python
-# src/models/gpt2_attnlrp_loader.py
-from transformers.models.gpt2 import modeling_gpt2
-from lxt.efficient import monkey_patch
-monkey_patch(modeling_gpt2, verbose=False)
-```
-
-Once patched, `loss.backward()` no longer computes ordinary gradients — the
-patched autograd functions propagate **relevance**. So
-`(input_embeds.grad * input_embeds).sum(-1)` gives the AttnLRP relevance of each
-token (matches the reference example
-`third_party/LRP-eXplains-Transformers/examples/paper/llama.py`).
-
-Per-layer relevance comes from a forward-hook on each `model.transformer.h[l]`
-that calls `hidden.retain_grad()`; after backward, `(hidden.grad * hidden).sum(-1)`
-is the layer-`l` token relevance.
-
-### Data
-
-50 examples from `squad_v2[validation]`. Each is formatted as
-
-```
-Context: <passage>
-Question: <q>
-Answer:
-```
-
-We keep only prompts that fit `max_length=512` GPT-2 tokens.
-
-### Target logit explained
-
-For each prompt we compute the next-token logits at the final position, take
-`argmax` as the predicted token, and run AttnLRP w.r.t. that scalar logit.
+Relevance readout:
+- **Token relevance**: `(input_embeds * input_embeds.grad).sum(-1)`
+- **Layer relevance**: `(hidden * hidden.grad).sum(-1)` via retained forward hooks
+- **Parameter relevance** (Part 3): `param * param.grad` aggregated by layer, component,
+  and attention head
 
 ### Faithfulness (Blücher et al., 2024)
 
-For every sample we run **token-flipping** with two strategies and compute the
-target-probability AUC over `steps=20` flip levels:
+Token-flipping AUC at 20 flip levels:
+- **MoRF** — remove most-relevant-first. Lower AUC ⇒ more faithful.
+- **LeRF** — remove least-relevant-first. Higher AUC ⇒ more faithful.
 
-- **MoRF** — flip Most-Relevant-First (descending relevance). Lower AUC ⇒ more faithful.
-- **LeRF** — flip Least-Relevant-First (ascending relevance). Higher AUC ⇒ more faithful.
-
-To occlude a token we replace its id with the pad/eos token id and re-run a
-no-grad forward, recording `softmax(logits)[target_id]`.
-
-### Random baseline
-
-For each sample we draw `R_random ~ N(0, I)` of the same length and run the
-same MoRF / LeRF pipeline on it (seed `0`). AttnLRP is faithful iff
+We also compute comprehensiveness and sufficiency gaps relative to a random baseline:
 
 ```
-auc_morf       <  auc_random_morf
-auc_lerf       >  auc_random_lerf
+Δ_Comp = AUC_rand_MoRF − AUC_MoRF    (positive = top tokens carry evidence)
+Δ_Suff = AUC_LeRF − AUC_rand_LeRF    (positive = bottom tokens are dispensable)
 ```
+
+These gaps remove the confidence-shift confound: both the model and the random baseline
+rise after fine-tuning, so gap growth reflects genuine ranking improvement.
+
+## Results
+
+50 validation samples per configuration, GPT-2 base (124M), fp32, single GPU.
+
+### Sign-fix
+
+![signfix-before](figures/fig_signfix_before.png)
+![signfix-after](figures/fig_signfix_after.png)
+
+Default initialization on GPT-2 produces inverted relevance signs. Contrastive masking
+restores the expected highlight on context evidence tokens.
+
+### Faithfulness: MoRF/LeRF AUC
+
+| Configuration | AUC_MoRF ↓ | AUC_rand | AUC_LeRF ↑ |
+|---|---:|---:|---:|
+| Base → SciQ | 0.004 | 0.026 | 0.071 |
+| FT-SciQ → SciQ | 0.023 | 0.251 | 0.462 |
+| Base → SQuAD v2 | 0.006 | 0.049 | 0.089 |
+| FT-SQuAD → SQuAD v2 | 0.018 | 0.343 | 0.790 |
+
+All four configurations pass both directions of the Blücher sanity check.
+
+### Comprehensiveness & sufficiency gaps
+
+| Configuration | Δ_Comp | Δ_Suff |
+|---|---:|---:|
+| Base → SciQ | 0.022 | 0.039 |
+| FT-SciQ → SciQ | **0.228** (×10.4) | **0.186** (×4.8) |
+| Base → SQuAD v2 | 0.043 | 0.038 |
+| FT-SQuAD → SQuAD v2 | **0.325** (×7.5) | **0.444** (×11.7) |
+
+Both gaps grow substantially after fine-tuning, ruling out a pure confidence-shift
+explanation. See `figures/fig_faithfulness_auc.png` and `figures/fig_gaps_over_steps.png`
+for the co-evolution of faithfulness with training.
+
+### Fine-tuning dynamics
+
+| Figure | Description |
+|--------|-------------|
+| `fig_loss_curves.png` | Training loss (SQuAD ~36k steps, SciQ ~2.2k steps) |
+| `fig_accuracy.png` | Token accuracy (SQuAD →85%, SciQ →93.5%) |
+| `fig_faithfulness_auc.png` | MoRF/LeRF AUC over training steps |
+| `fig_gaps_over_steps.png` | Δ_Comp and Δ_Suff over training steps |
+
+### Token-level: before vs. after fine-tuning
+
+| Figure | Description |
+|--------|-------------|
+| `fig_squad_tokens_base.png` + `_ft.png` | SQuAD v2: relevance shifts from prompt scaffolding to evidence tokens |
+| `fig_squad_layers_base.png` + `_ft.png` | SQuAD v2: layer-wise view, migration concentrated in upper layers |
+| `fig_sciq_tokens_base.png` + `_ft.png` | SciQ: relevance shifts from question scaffolding to option letter |
+
+### Parameter-level attribution
+
+| Figure | Description |
+|--------|-------------|
+| `fig_params_squad_base.png` + `_ft.png` | SQuAD v2: fine-tuning concentrates additional relevance in **late-stage attention** |
+| `fig_params_sciq_base.png` + `_ft.png` | SciQ: fine-tuning concentrates additional relevance in **late-stage MLP** |
+
+The task-specific divergence suggests SQuAD v2's extractive QA relies on
+context-conditioned routing (attention), while SciQ's multiple-choice format relies more
+on parametric knowledge retrieval (MLP).
+
+### Case studies: head-level signatures
+
+| Figure | Description |
+|--------|-------------|
+| `fig_case_numeric_heads.png` | Numeric answers activate a compact, repeatable head subset |
+| `fig_case_unknown_heads.png` | Unanswerable outputs spread relevance broadly across late layers |
+
+### Appendix: paired case studies
+
+Four text pairs (same prompt, numeric vs. unanswerable prediction) with head-level
+parameter maps and lxt-style token heatmap PDFs:
+
+| Pair | Context | Numeric (sample) | Unanswerable (sample) |
+|------|---------|------------------|----------------------|
+| A | The Normans | 001 | 002 |
+| B | Crusaders at Amalfi | 138 | 139 |
+| C | Edward the Confessor | 090 | 093 |
+| D | Robert Guiscard | 064 | 066 |
+
+Figures: `sample_NNN_param_heads.png` + `heatmap_sample_NNN.pdf` for each sample.
 
 ## How to run
 
 ```bash
 conda activate llm-xai-paper
+
+# Part 1: base GPT-2 AttnLRP on SQuAD v2
 python main.py --config configs/gpt2_efficient.yaml
+
+# Part 3: parameter attribution on fine-tuned checkpoints
+python main.py --config configs/gpt2_efficient_finetuned_squad.yaml
+python main.py --config configs/gpt2_efficient_finetuned_sciq.yaml
 ```
 
-### Run the efficient GPT-2 path
+Output tree (with `parameter_attribution.enabled: true`):
 
-`main.py` selects model/explainer by `model.family`. Use:
+```
+<output.dir>/
+├── faithfulness_summary.json
+├── relevance/sample_NNN.pt
+├── parameter_relevance/sample_NNN.pt
+└── figures/
+    ├── tokens/sample_NNN_tokens.png
+    ├── layers/sample_NNN_layers.png
+    ├── parameter_heads/sample_NNN_param_heads.png
+    ├── parameter_layers_line/sample_NNN_param_layers_line.png
+    └── parameter_layers_block/sample_NNN_param_layers_block.png
+```
+
+## Config reference
 
 ```yaml
 model:
   family: gpt2_efficient
-  name: gpt2
+  name: gpt2                     # HF model id or local checkpoint path
   device: cuda
   dtype: bfloat16
+
+data:
+  dataset: squad_v2              # squad_v2 or sciq
+  split: validation
+  num_samples: 50
+  max_length: 512
+
+parameter_attribution:
+  enabled: true
+  save_tensors: false            # full tensors are hundreds of MB/sample
+  top_modules: 20
+
+faithfulness:
+  steps: 20
+
+output:
+  dir: outputs-gpt2-efficient
+  figures_dir: outputs-gpt2-efficient/figures
 ```
 
-Then run as usual:
-
-```bash
-python main.py --config configs/gpt2_efficient.yaml
-```
-
-and keep `model.family: gpt2_efficient`.
-
-Run time: **~2 minutes** for 50 samples on a single CUDA device (gpt2-small,
-fp32). Output tree:
-
-```
-outputs-gpt2-efficient/
-├── faithfulness_summary.json
-├── figures/
-│   ├── tokens/sample_NNN_tokens.png
-│   ├── layers/sample_NNN_layers.png
-│   ├── parameter_heads/sample_NNN_param_heads.png
-│   ├── parameter_layers_line/sample_NNN_param_layers_line.png
-│   └── parameter_layers_block/sample_NNN_param_layers_block.png
-├── relevance/sample_NNN.pt
-└── parameter_relevance/sample_NNN.pt
-```
-
-The cached `.pt` tensors are reused by Parts 2 / 3 so we never re-run AttnLRP
-on identical inputs.
-
-## Results (Part 1)
-
-50 SQuAD_v2 validation samples, GPT-2 base (124 M params), fp32, single GPU,
-`steps=20`, seed `0`.
-
-| Metric | AttnLRP | Random baseline | Faithful? |
-|---|---:|---:|---|
-| `auc_morf` (lower better) | **0.0077** | 0.0499 | ✅ AttnLRP ≪ random |
-| `auc_lerf` (higher better) | **0.0839** | 0.0567 | ✅ AttnLRP > random |
-
-Interpretation:
-
-- **MoRF**: removing the most-relevant tokens collapses the target probability
-  ~6.5× faster under AttnLRP than under random ranking — relevance scores really
-  do identify the tokens the model relies on.
-- **LeRF**: removing the least-relevant tokens degrades the prediction much less
-  under AttnLRP than under random — the bottom of the AttnLRP ranking is
-  genuinely irrelevant to the prediction.
-
-Both directions of the Blücher-2024 sanity check pass, so the reproduction is
-working as intended.
-
-Per-sample numbers and the full config are saved in
-`outputs-gpt2-efficient/faithfulness_summary.json`.
-
-### Sample heatmaps
-
-`outputs-gpt2-efficient/figures/tokens/sample_000_tokens.png` shows the 1 × T token-relevance heatmap
-for the first sample (target token `Normandy`); `outputs-gpt2-efficient/figures/layers/sample_000_layers.png` shows
-the same sample as an L × T grid (12 GPT-2 transformer blocks × prompt tokens).
-Red = positive relevance, blue = negative.
-
-## Part 1 checklist
-
-- [x] Load GPT-2 base & tokenizer (lxt `GPT2LMHeadModel`)
-- [x] Patch GPT-2 with `lxt.efficient.monkey_patch(modeling_gpt2)`
-- [x] Load SQuAD_v2 validation split and format as QA prompts
-- [x] Compute per-token relevance `R(x_i)` from input embeddings
-- [x] Capture per-layer relevance `R^(l)(x_i)` via block forward hooks
-- [x] Visualise token / layer heatmaps
-- [x] Faithfulness MoRF + LeRF AUC + random baseline
-
-## Notes for Part 2 / Part 3
-
-- **Part 2** — fine-tune GPT-2 with `scripts/train_gpt2_qa.py`. The script supports
-  SQuAD_v2 and SciQ, logs token accuracy, and can compute next-token MoRF/LeRF
-  faithfulness during evaluation.
-- **Part 3** — enable `parameter_attribution.enabled: true` in the YAML config and
-  run `main.py`. Parameter relevance is computed from the patched backward pass as
-  `param.grad * param`, then aggregated by layer, module, and attention head. The
-  provided fine-tuned configs compare the SQuAD and SciQ checkpoints.
-
-For exact commands, see `RUNNING.md`.
+For detailed commands see [RUNNING.md](RUNNING.md).
