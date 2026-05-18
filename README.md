@@ -75,12 +75,6 @@ conda activate llm-xai-paper
 pip install -r requirements.txt
 ```
 
-If Hugging Face or GitHub downloads are slow on the server:
-
-```bash
-source /etc/network_turbo
-```
-
 ## How it works
 
 ### AttnLRP with contrastive gradient masking
