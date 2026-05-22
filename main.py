@@ -32,7 +32,7 @@ from src.visualize.relevance_plots import (
 )
 
 
-def _resolve_pretrained_local_path(name: str, cfg_path: Path) -> str:
+def _resolve_pretrained_local_path(name: str, cfg_path: Path) -> str: #用来处理ckpt路径的函数
     """Resolve local checkpoint dirs; leave Hugging Face hub ids (e.g. ``gpt2``) unchanged."""
     path = Path(name)
     if path.is_absolute():
@@ -56,7 +56,7 @@ def _random_result(result: dict, generator: torch.Generator) -> dict:
     return {**result, "token_relevance": rand_rel}
 
 
-def _load_model_and_explainer(model_cfg: dict):
+def _load_model_and_explainer(model_cfg: dict): #返回model, tokenizer, explain_sample
     family = model_cfg.get("family", "gpt2")
     name = model_cfg["name"]
     device = model_cfg["device"]
@@ -105,13 +105,15 @@ def main() -> None:
     parser.add_argument("--config", default="configs/gpt2_efficient.yaml")
     args = parser.parse_args()
 
-    cfg_path = Path(args.config).resolve()
+    cfg_path = Path(args.config).resolve() #一个指向「磁盘上那一个 YAML 文件」的绝对 Path，后面读文件、算「仓库根」都靠它。
     cfg = yaml.safe_load(cfg_path.read_text(encoding='utf-8'))
     cfg["model"]["name"] = _resolve_pretrained_local_path(cfg["model"]["name"], cfg_path)
     out_dir = Path(cfg["output"]["dir"])
+    #三个枝干二级文件夹
     fig_dir = Path(cfg["output"]["figures_dir"])
     rel_dir = out_dir / "relevance"
     param_dir = out_dir / "parameter_relevance"
+
     out_dir.mkdir(parents=True, exist_ok=True)
     fig_dir.mkdir(parents=True, exist_ok=True)
     fig_tokens = fig_dir / "tokens"
@@ -133,7 +135,7 @@ def main() -> None:
     save_parameter_tensors = bool(param_cfg.get("save_tensors", False))
     top_parameter_modules = int(param_cfg.get("top_modules", 20))
 
-    model, tokenizer, explain_sample = _load_model_and_explainer(cfg["model"])
+    model, tokenizer, explain_sample = _load_model_and_explainer(cfg["model"]) #explain_sample是解释样本的函数，这里是引用函数，后面调用explain_sample(model, tokenizer, sample, device=device, parameter_attribution=param_enabled, save_parameter_tensors=save_parameter_tensors)
     samples = _load_dataset_samples(cfg, cfg_path, tokenizer)
 
     records = []
@@ -171,6 +173,7 @@ def main() -> None:
         parameter_record = {}
         if param_enabled:
             parameter_summary = result["parameter_summary"]
+
             save_attention_head_heatmap(
                 parameter_summary["attention_head_abs"],
                 out_path=fig_param_heads / f"sample_{i:03d}_param_heads.png",
@@ -188,6 +191,7 @@ def main() -> None:
                 out_path=fig_param_layers_block / f"sample_{i:03d}_param_layers_block.png",
                 title=f"Sample {i} — layer-wise parameter relevance (block)",
             )
+
             parameter_payload = {
                 "target_token": result["target_token"],
                 "target_id": result["target_id"],
@@ -223,7 +227,7 @@ def main() -> None:
         "mean": means,
         "per_sample": records,
     }
-    summary_path = out_dir / "faithfulness_summary.json"
+    summary_path = out_dir / "faithfulness_summary.json"    #输出总summary文件
     summary_path.write_text(json.dumps(summary, indent=2))
 
     print("\n=== Part 1 results ===")

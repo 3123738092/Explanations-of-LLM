@@ -152,7 +152,7 @@ def save_layer_heatmap(tokens, layer_relevance, out_path: Path, title: str = "")
     r = _to_numpy(layer_relevance)
     # per-layer (per-row) normalization so each layer's pattern is visible
     # — same convention as lxt's official latent-feature-attribution recipe.
-    row_max = np.maximum(np.abs(r).max(axis=1, keepdims=True), 1e-9)
+    row_max = np.maximum(np.abs(r).max(axis=1, keepdims=True), 1e-9)         #按行归一化
     r_norm = r / row_max
 
     fig, ax = plt.subplots(

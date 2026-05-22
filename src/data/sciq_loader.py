@@ -87,7 +87,7 @@ def load_sciq_samples(
         prompt = format_sciq_prompt(question, context, options)
 
         if tokenizer is not None:
-            ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
+            ids = tokenizer(prompt, return_tensors="pt")["input_ids"]  #tokenizer.encode(prompt)返回的是一个类似于字典的东西，有两个键 input_ids, attention_mask。 input_ids是token的id列表，attention_mask是注意力掩码列表。
             if ids.shape[1] > max_length:
                 continue
 
